@@ -4,7 +4,8 @@
   const loadPregeneratedInputEl = document.getElementById("loadPregeneratedInput");
   const loadPregeneratedPresetEl = document.getElementById("loadPregeneratedPreset");
   const COLUMNAR_BINARY_FORMAT = "fasttable-columnar-binary-v2";
-  const TABLE_PRESETS_FOLDER = "tables_presets";
+  const TABLE_PRESETS_BASE_URL =
+    "https://pub-c9f856de3fa0426290595486c4ea4d73.r2.dev/tables_presets";
 
   if (!saveObjectBtnEl || !loadPregeneratedBtnEl || !loadPregeneratedInputEl) {
     return;
@@ -1051,8 +1052,8 @@
     }
 
     const baseFileName = `fasttable-columnar-${presetRowCount}`;
-    const metadataUrl = `${TABLE_PRESETS_FOLDER}/${baseFileName}.json`;
-    const binaryUrl = `${TABLE_PRESETS_FOLDER}/${baseFileName}.bin`;
+    const metadataUrl = `${TABLE_PRESETS_BASE_URL}/${baseFileName}.json`;
+    const binaryUrl = `${TABLE_PRESETS_BASE_URL}/${baseFileName}.bin`;
     const loadStart = performance.now();
     const loadTimings = {
       jsonReadMs: 0,
