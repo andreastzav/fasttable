@@ -45,8 +45,8 @@ The defaults already selected in the UI are the best-performing choices for this
 - Search dict keys: on
 - Intersect dicts: on
 - Smarter planner: on
-- Use smart filtering: off (on: reuse the previous filtered subset for stricter follow-up input)
-- Use filter cache: off (on: store previous filter results in cacheon for repeated searches)
+- Use smart filtering: off (**on**: reuse the previous filtered subset for stricter follow-up input)
+- Use filter cache: off (**on**: store previous filter results in cacheon for repeated searches)
 
 ### Sorting defaults
 
