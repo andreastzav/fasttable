@@ -2,6 +2,11 @@
 
 Inspired by [gabrielpetersson/fast-grid](https://github.com/gabrielpetersson/fast-grid), this project is my attempt to push web table performance as far as possible through **single-thread filtering and sorting** improvements.
 
+## Live demo
+
+[Live demo](https://andreastzav.github.io/fasttable/)
+- Load a table preset, e.g. the one with 1 million rows, and play with filtering and sorting. Alternatively you can generate your own table.
+
 ## Project direction
 
 The work here intentionally focused on algorithmic and data-structure improvements on the main thread:
@@ -16,9 +21,9 @@ I did not prioritize building a worker-based filtering/sorting pipeline that spl
 
 On a 1,000,000 row table, this project reaches:
 
-- Filtering: about **12 ms** total, roughly a **77x** improvement
+- Filtering: about **12 ms** total on average, roughly a **77x** improvement
 - Single-column sorting: about **1 ms**, roughly a **1500x** improvement
-- Two-column sorting: about **20 ms**, roughly a **340x** improvement
+- Two-column sorting: about **20 ms** on average, roughly a **340x** improvement
 
 With this benchmark profile, I think this may now be the fastest web table implementation.
 
@@ -51,8 +56,6 @@ The defaults already selected in the UI are the best-performing choices for this
 ### Sorting defaults
 
 - Sort mode: use precomp indices
-- Use typed comparator: on
-- Sort indices: on
 
 ## Notes
 
