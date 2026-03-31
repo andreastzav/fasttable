@@ -1,6 +1,6 @@
 # Fast Table
 
-Inspired by [gabrielpetersson/fast-grid](https://github.com/gabrielpetersson/fast-grid), this project is my attempt to push web table performance as far as possible through **single-thread filtering and sorting** improvements.
+Inspired by [gabrielpetersson/fast-grid](https://github.com/gabrielpetersson/fast-grid), this project is my attempt to push web table performance as far as possible through **single-threaded filtering and sorting** improvements.
 
 ## Live demo
 
@@ -9,7 +9,7 @@ Inspired by [gabrielpetersson/fast-grid](https://github.com/gabrielpetersson/fas
 
 ## Project direction
 
-The work here intentionally focused on algorithmic and data-structure improvements on the main thread:
+The work here intentionally focuses on algorithmic and data-structure improvements on the main thread:
 
 - Faster filtering
 - Faster sorting
@@ -19,7 +19,7 @@ I did not prioritize building a worker-based filtering/sorting pipeline that spl
 
 ## Performance results
 
-On a 1,000,000 row table, this project reaches:
+On a 1,000,000 row table, this project reaches (vs native browser implementations):
 
 - Filtering: about **12 ms** total on average, roughly a **77x** improvement
 - Single-column sorting: about **1 ms**, roughly a **1500x** improvement
@@ -51,7 +51,7 @@ The defaults already selected in the UI are the best-performing choices for this
 - Intersect dicts: on
 - Smarter planner: on
 - Use smart filtering: off (**on**: reuse the previous filtered subset for stricter follow-up input)
-- Use filter cache: off (**on**: store previous filter results in cacheon for repeated searches)
+- Use filter cache: off (**on**: store previous filter results in cache for repeated searches)
 
 ### Sorting defaults
 
@@ -59,12 +59,12 @@ The defaults already selected in the UI are the best-performing choices for this
 
 ## Notes
 
-Generation can use workers, but filtering and sorting runs in main thread (single thread).
+Table generation uses web workers by default, but filtering and sorting run on the main thread (single thread).
 
 ## Productivity credits
 
-This project was built with **Codex** and **ChatGPT** used as productivity multipliers for faster iteration, implementation support, and documentation.
-I think of this workflow as "Lambda coding":
+This project was built with the help of **Codex** and **ChatGPT**, which were used as productivity multipliers for faster iteration, implementation support, and documentation.
+I think of this workflow as **Lambda coding**:
 Human on top providing direction, ideas, constraints, and feedback (plus the occasional curse word); Codex on the right as the hard(ly) working software engineer; and ChatGPT on the left for critique and adversarial feedback.
 
 ## TODO
