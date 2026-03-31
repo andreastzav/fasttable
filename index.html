@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>Fast Table Generator</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="controls">
+        <div class="topActionRow">
+          <label for="loadPregeneratedPreset">Load Table Preset</label>
+          <select
+            id="loadPregeneratedPreset"
+            title="Load a preset table"
+          >
+            <option value="">Select...</option>
+            <option value="100000">100.000 rows</option>
+            <option value="500000">500.000 rows</option>
+            <option value="1000000">1.000.000 rows</option>
+            <option value="5000000">5.000.000 rows</option>
+          </select>
+          <span class="primaryActionBox">
+            <span class="primaryActionTopRow">
+              <label for="rowCount">Rows</label>
+              <select id="rowCount">
+                <option value="10">10</option>
+			    <option value="10000">10.000</option>
+                <option value="50000">50.000</option>
+			    <option value="100000">100.000</option>
+                <option value="500000">500.000</option>
+                <option value="1000000" selected>1.000.000</option>
+			    <option value="2000000">2.000.000</option>
+                <option value="5000000">5.000.000</option>
+                <option value="10000000">10.000.000</option>
+              </select>
+              <label class="checkboxLabel" for="useWorkerGeneration">
+                <input id="useWorkerGeneration" type="checkbox" checked />
+                Use worker(s) for generation
+              </label>
+              <span id="workerGenerationOptions" class="workerOptions">
+                <label for="workerCount">Workers</label>
+                <select id="workerCount">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="4" selected>4</option>
+                  <option value="6">6</option>
+                  <option value="8">8</option>
+                </select>
+                <label for="workerChunkSize">Chunk size</label>
+                <select id="workerChunkSize">
+                  <option value="1000">1k</option>
+                  <option value="5000">5k</option>
+                  <option value="10000" selected>10k</option>
+                  <option value="20000">20k</option>
+                  <option value="50000">50k</option>
+                </select>
+              </span>
+              <button
+                id="generateBtn"
+                type="button"
+                title="Generate a new random table with the selected row count"
+              >
+                Generate Random Table
+              </button>
+              <button
+                id="saveObjectBtn"
+                type="button"
+                title="Export current table as fasttable-columnar-{rows}.json/.bin"
+              >
+                Save Table
+              </button>
+              <button
+                id="loadPregeneratedBtn"
+                type="button"
+                title="Load a local pregenerated table (.json + .bin)"
+              >
+                Load Table
+              </button>
+            </span>
+            <span class="primaryActionBottomRow">
+              <progress id="workerProgress" value="0" max="100"></progress>
+              <span id="workerProgressText">Worker progress: idle.</span>
+            </span>
+          </span>
+          <input
+            id="loadPregeneratedInput"
+            type="file"
+            accept=".json,.bin,application/json,application/octet-stream"
+            multiple
+            hidden
+          />
+        </div>
+        <div class="controlsGroup filteringGroup">
+          <div class="controlsRow optionsRow">
+            <label class="checkboxLabel" for="useColumnarData">
+              <input
+                id="useColumnarData"
+                type="checkbox"
+                checked
+                title="Filter using column-oriented data structures instead of row scans."
+              />
+              Use columnar data
+            </label>
+            <label class="checkboxLabel" for="useBinaryColumnar">
+              <input
+                id="useBinaryColumnar"
+                type="checkbox"
+                checked
+                title="Use binary/typed-array columnar storage for filtering."
+              />
+              Use binary columnar
+            </label>
+            <label class="checkboxLabel" for="useNumericData">
+              <input
+                id="useNumericData"
+                type="checkbox"
+                checked
+                title="Filter over numeric row format instead of object rows."
+              />
+              Use numeric rows
+            </label>
+            <label class="checkboxLabel" for="enableCaching">
+              <input
+                id="enableCaching"
+                type="checkbox"
+                checked
+                title="Use pre-normalized lowercase strings for faster matching."
+              />
+              Use normalized strings
+            </label>
+            <label class="checkboxLabel" for="useDictionaryKeySearch">
+              <input
+                id="useDictionaryKeySearch"
+                type="checkbox"
+                checked
+                title="Use dictionary-key lookup paths when available."
+              />
+              Search dict keys
+            </label>
+            <label class="checkboxLabel" for="useDictionaryIntersection">
+              <input
+                id="useDictionaryIntersection"
+                type="checkbox"
+                checked
+                title="Intersect dictionary candidates across active dictionary-backed columns before residual scans."
+              />
+              Intersect dicts
+            </label>
+            <label class="checkboxLabel" for="useSmarterPlanner">
+              <input
+                id="useSmarterPlanner"
+                type="checkbox"
+				checked
+                title="Estimate residual filter selectivity from a small sample and apply more selective filters first."
+              />
+              Smarter planner
+            </label>
+            <label class="checkboxLabel" for="useSmartFiltering">
+              <input
+                id="useSmartFiltering"
+                type="checkbox"
+                title="Reuse previous filter results when the next filter is stricter."
+              />
+              Use smart filtering
+            </label>
+            <label class="checkboxLabel" for="useFilterCache">
+              <input
+                id="useFilterCache"
+                type="checkbox"
+                title="Cache top-level filter outputs for repeated queries."
+              />
+              Use filter cache
+            </label>
+            <button
+              id="clearFilterCacheBtn"
+              type="button"
+              title="Clear cached filter results."
+            >
+              Empty cache
+            </button>
+            <span class="rowButtonGroup">
+              <button
+                id="benchmarkBtn"
+                type="button"
+                class="filterBenchmarkBtn"
+                title="Run filtering benchmarks across filter combinations."
+              >
+                Bench filtering
+              </button>
+              <button
+                id="benchmarkCurrentBtn"
+                type="button"
+                class="filterBenchmarkBtn"
+                title="Benchmark filtering with the currently selected options only."
+              >
+                Bench Current Combo
+              </button>
+            </span>
+          </div>
+        </div>
+        <div class="controlsGroup sortingGroup">
+          <div class="controlsRow optionsRow">
+            <label for="sortMode">Sort mode</label>
+            <select id="sortMode" title="Choose which sorting algorithm to use.">
+              <option value="native">native</option>
+              <option value="timsort">timsort</option>
+              <option value="precomputed" selected>use precomp indices</option>
+            </select>
+            <label class="checkboxLabel" for="useTypedSortComparator">
+              <input
+                id="useTypedSortComparator"
+                type="checkbox"
+                checked
+                title="Use number/string-specific comparators where possible."
+              />
+              Use typed comparator
+            </label>
+            <label class="checkboxLabel" for="useIndexSort">
+              <input
+                id="useIndexSort"
+                type="checkbox"
+                checked
+                title="Sort index arrays and map back to rows instead of sorting row objects directly."
+              />
+              Sort indices
+            </label>
+            <button
+              id="resetSortBtn"
+              type="button"
+              title="Clear active sort columns and return to unsorted state."
+            >
+              Reset all sorted columns
+            </button>
+            <span class="rowButtonGroup">
+              <button
+                id="sortBenchmarkBtn"
+                type="button"
+                class="sortBenchmarkBtn"
+                title="Run sorting benchmarks across modes and comparator/index settings."
+              >
+                Bench sorting
+              </button>
+              <button
+                id="sortBenchmarkCurrentBtn"
+                type="button"
+                class="sortBenchmarkBtn"
+                title="Benchmark sorting using only the current sorting combination."
+              >
+                Bench Current Combo
+              </button>
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section class="statusWrap">
+        <div id="generationStatusPanel" class="statusPanel">
+          <div class="statusPanelHeader">
+            <span>Generation telemetry</span>
+            <span class="statusPanelButtons">
+              <button
+                id="generationStatusClearBtn"
+                type="button"
+                class="statusPanelBtn clear"
+                title="Clear generation telemetry"
+              >
+                &times;
+              </button>
+              <button
+                id="generationStatusToggleBtn"
+                type="button"
+                class="statusPanelBtn"
+                title="Minimize generation telemetry"
+              >
+                &#9650;
+              </button>
+            </span>
+          </div>
+          <p id="generationStatus" class="status statusBody">No data generated yet.</p>
+        </div>
+        <p id="filterStatus" class="status">No filter applied yet.</p>
+        <p id="sortTelemetryStatus" class="status">
+          No sort telemetry yet.
+        </p>
+        <div id="benchmarkStatusPanel" class="statusPanel">
+          <div class="statusPanelHeader">
+            <span>Benchmark telemetry</span>
+            <span class="statusPanelButtons">
+              <button
+                id="benchmarkStatusClearBtn"
+                type="button"
+                class="statusPanelBtn clear"
+                title="Clear benchmark telemetry"
+              >
+                &times;
+              </button>
+              <button
+                id="benchmarkStatusToggleBtn"
+                type="button"
+                class="statusPanelBtn"
+                title="Minimize benchmark telemetry"
+              >
+                &#9650;
+              </button>
+            </span>
+          </div>
+          <p id="benchmarkStatus" class="status statusBody">No benchmark run yet.</p>
+        </div>
+      </section>
+
+      <section class="tableWrap">
+        <table id="previewTable" class="previewTable">
+          <thead id="previewHead"></thead>
+          <tbody id="previewBody"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="./generation.js"></script>
+    <script src="./generation-workers.js"></script>
+    <script src="./filtering.js"></script>
+    <script src="./timsort.js?v=1"></script>
+    <script src="./sorting.js"></script>
+    <script src="./table-rendering.js"></script>
+    <script src="./app.js"></script>
+    <script src="./io.js"></script>
+    <script src="./filtering-benchmark.js"></script>
+    <script src="./sorting-benchmark.js"></script>
+  </body>
+</html>

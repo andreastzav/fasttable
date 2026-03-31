@@ -1,0 +1,2597 @@
+{
+	"format": "fasttable-columnar-binary-v2",
+	"rowCount": 100000,
+	"baseColumnCount": 15,
+	"columnKeys": [
+		"index",
+		"firstName",
+		"lastName",
+		"age",
+		"column5",
+		"column6",
+		"column7",
+		"column8",
+		"column9",
+		"column10",
+		"column11",
+		"column12",
+		"column13",
+		"column14",
+		"column15"
+	],
+	"columnNames": [
+		"Index",
+		"First Name",
+		"Last Name",
+		"Age",
+		"Column5",
+		"Column6",
+		"Column7",
+		"Column8",
+		"Column9",
+		"Column10",
+		"Column11",
+		"Column12",
+		"Column13",
+		"Column14",
+		"Column15"
+	],
+	"columns": [
+		{
+			"index": 0,
+			"key": "index",
+			"storageKind": "int32",
+			"byteOffset": 0,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 400000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 1,
+			"key": "firstName",
+			"storageKind": "uint16",
+			"byteOffset": 800000,
+			"byteLength": 200000,
+			"dictionary": [
+				"Katherine",
+				"Olivia",
+				"Sarah",
+				"James",
+				"Matthew",
+				"Mia",
+				"Carol",
+				"Jennifer",
+				"Jonathan",
+				"Christopher",
+				"Gabriel",
+				"Grace",
+				"Gabriella",
+				"Claire",
+				"Rachel",
+				"Leo",
+				"Isaiah",
+				"Sharon",
+				"Aaron",
+				"Nicole",
+				"David",
+				"Eli",
+				"Christian",
+				"Raymond",
+				"Zoe",
+				"Sebastian",
+				"Donald",
+				"Nolan",
+				"Edward",
+				"Kimberly",
+				"Aubrey",
+				"Amy",
+				"Ruby",
+				"Michelle",
+				"Stephanie",
+				"Jose",
+				"Kenneth",
+				"Helen",
+				"Isaac",
+				"Natalie",
+				"Josiah",
+				"Paisley",
+				"Stephen",
+				"William",
+				"Emily",
+				"Alexander",
+				"Paul",
+				"Diane",
+				"Michael",
+				"Sophia",
+				"Melissa",
+				"Shirley",
+				"Lucy",
+				"Betty",
+				"Adam",
+				"Karen",
+				"Nicholas",
+				"Brian",
+				"Eva",
+				"Mason",
+				"Riley",
+				"Lisa",
+				"Lauren",
+				"Mary",
+				"Samantha",
+				"Thomas",
+				"Christine",
+				"Linda",
+				"Carolyn",
+				"Dennis",
+				"Brandon",
+				"Kevin",
+				"Dylan",
+				"Luke",
+				"Nancy",
+				"Brenda",
+				"Jessica",
+				"Richard",
+				"Dorothy",
+				"Penelope",
+				"Victoria",
+				"Quinn",
+				"Levi",
+				"Lily",
+				"Hunter",
+				"Gary",
+				"Layla",
+				"Asher",
+				"Violet",
+				"Samuel",
+				"Susan",
+				"Chloe",
+				"Landon",
+				"Andrew",
+				"Aria",
+				"Barbara",
+				"Aurora",
+				"Debra",
+				"Maria",
+				"Charles",
+				"Angela",
+				"Robert",
+				"Eleanor",
+				"Hudson",
+				"Cynthia",
+				"Brooklyn",
+				"Janet",
+				"Isabella",
+				"Madison",
+				"Tyler",
+				"Steven",
+				"Justin",
+				"Parker",
+				"Daniel",
+				"Ella",
+				"Madeline",
+				"Jordan",
+				"Aidan",
+				"Jeremiah",
+				"Jaxon",
+				"Mark",
+				"Ariana",
+				"Hannah",
+				"Mateo",
+				"Cameron",
+				"Jerry",
+				"Deborah",
+				"Frank",
+				"Joseph",
+				"Ruth",
+				"Hazel",
+				"Stella",
+				"John",
+				"Savannah",
+				"Avery",
+				"Lillian",
+				"Patricia",
+				"Autumn",
+				"Sandra",
+				"Jeffrey",
+				"Henry",
+				"Jack",
+				"Adrian",
+				"Alice",
+				"Elizabeth",
+				"Scott",
+				"Ashley",
+				"Jason",
+				"Joshua",
+				"Megan",
+				"Allison",
+				"Gregory",
+				"Caleb",
+				"Jayden",
+				"Carson",
+				"Owen",
+				"Addison",
+				"Amanda",
+				"Eric",
+				"Julian",
+				"Lydia",
+				"Sadie",
+				"Nathan",
+				"Austin",
+				"Ryan",
+				"Kennedy",
+				"Ethan",
+				"George",
+				"Carter",
+				"Ezra",
+				"Wyatt",
+				"Patrick",
+				"Kathleen",
+				"Margaret",
+				"Benjamin",
+				"Pamela",
+				"Skylar",
+				"Lincoln",
+				"Anna",
+				"Zachary",
+				"Nora",
+				"Anthony",
+				"Piper",
+				"Heather",
+				"Scarlett",
+				"Donna",
+				"Evan",
+				"Catherine",
+				"Sophie",
+				"Rebecca",
+				"Larry",
+				"Jace",
+				"Grayson",
+				"Jacob"
+			],
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 0,
+				"byteLength": 0
+			},
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 1000000,
+					"byteLength": 400000
+				},
+				"indexByKey": {
+					"katherine": {
+						"start": 0,
+						"length": 515
+					},
+					"olivia": {
+						"start": 515,
+						"length": 475
+					},
+					"sarah": {
+						"start": 990,
+						"length": 510
+					},
+					"james": {
+						"start": 1500,
+						"length": 503
+					},
+					"matthew": {
+						"start": 2003,
+						"length": 514
+					},
+					"mia": {
+						"start": 2517,
+						"length": 516
+					},
+					"carol": {
+						"start": 3033,
+						"length": 468
+					},
+					"jennifer": {
+						"start": 3501,
+						"length": 475
+					},
+					"jonathan": {
+						"start": 3976,
+						"length": 497
+					},
+					"christopher": {
+						"start": 4473,
+						"length": 915
+					},
+					"gabriel": {
+						"start": 5388,
+						"length": 474
+					},
+					"grace": {
+						"start": 5862,
+						"length": 495
+					},
+					"gabriella": {
+						"start": 6357,
+						"length": 510
+					},
+					"claire": {
+						"start": 6867,
+						"length": 454
+					},
+					"rachel": {
+						"start": 7321,
+						"length": 439
+					},
+					"leo": {
+						"start": 7760,
+						"length": 483
+					},
+					"isaiah": {
+						"start": 8243,
+						"length": 499
+					},
+					"sharon": {
+						"start": 8742,
+						"length": 494
+					},
+					"aaron": {
+						"start": 9236,
+						"length": 971
+					},
+					"nicole": {
+						"start": 10207,
+						"length": 477
+					},
+					"david": {
+						"start": 10684,
+						"length": 1000
+					},
+					"eli": {
+						"start": 11684,
+						"length": 470
+					},
+					"christian": {
+						"start": 12154,
+						"length": 502
+					},
+					"raymond": {
+						"start": 12656,
+						"length": 497
+					},
+					"zoe": {
+						"start": 13153,
+						"length": 491
+					},
+					"sebastian": {
+						"start": 13644,
+						"length": 469
+					},
+					"donald": {
+						"start": 14113,
+						"length": 495
+					},
+					"nolan": {
+						"start": 14608,
+						"length": 499
+					},
+					"edward": {
+						"start": 15107,
+						"length": 510
+					},
+					"kimberly": {
+						"start": 15617,
+						"length": 464
+					},
+					"aubrey": {
+						"start": 16081,
+						"length": 494
+					},
+					"amy": {
+						"start": 16575,
+						"length": 487
+					},
+					"ruby": {
+						"start": 17062,
+						"length": 463
+					},
+					"michelle": {
+						"start": 17525,
+						"length": 498
+					},
+					"stephanie": {
+						"start": 18023,
+						"length": 478
+					},
+					"jose": {
+						"start": 18501,
+						"length": 470
+					},
+					"kenneth": {
+						"start": 18971,
+						"length": 477
+					},
+					"helen": {
+						"start": 19448,
+						"length": 478
+					},
+					"isaac": {
+						"start": 19926,
+						"length": 440
+					},
+					"natalie": {
+						"start": 20366,
+						"length": 488
+					},
+					"josiah": {
+						"start": 20854,
+						"length": 463
+					},
+					"paisley": {
+						"start": 21317,
+						"length": 469
+					},
+					"stephen": {
+						"start": 21786,
+						"length": 479
+					},
+					"william": {
+						"start": 22265,
+						"length": 507
+					},
+					"emily": {
+						"start": 22772,
+						"length": 965
+					},
+					"alexander": {
+						"start": 23737,
+						"length": 469
+					},
+					"paul": {
+						"start": 24206,
+						"length": 443
+					},
+					"diane": {
+						"start": 24649,
+						"length": 464
+					},
+					"michael": {
+						"start": 25113,
+						"length": 508
+					},
+					"sophia": {
+						"start": 25621,
+						"length": 490
+					},
+					"melissa": {
+						"start": 26111,
+						"length": 481
+					},
+					"shirley": {
+						"start": 26592,
+						"length": 516
+					},
+					"lucy": {
+						"start": 27108,
+						"length": 538
+					},
+					"betty": {
+						"start": 27646,
+						"length": 489
+					},
+					"adam": {
+						"start": 28135,
+						"length": 482
+					},
+					"karen": {
+						"start": 28617,
+						"length": 489
+					},
+					"nicholas": {
+						"start": 29106,
+						"length": 471
+					},
+					"brian": {
+						"start": 29577,
+						"length": 495
+					},
+					"eva": {
+						"start": 30072,
+						"length": 508
+					},
+					"mason": {
+						"start": 30580,
+						"length": 464
+					},
+					"riley": {
+						"start": 31044,
+						"length": 482
+					},
+					"lisa": {
+						"start": 31526,
+						"length": 487
+					},
+					"lauren": {
+						"start": 32013,
+						"length": 485
+					},
+					"mary": {
+						"start": 32498,
+						"length": 480
+					},
+					"samantha": {
+						"start": 32978,
+						"length": 976
+					},
+					"thomas": {
+						"start": 33954,
+						"length": 972
+					},
+					"christine": {
+						"start": 34926,
+						"length": 457
+					},
+					"linda": {
+						"start": 35383,
+						"length": 479
+					},
+					"carolyn": {
+						"start": 35862,
+						"length": 483
+					},
+					"dennis": {
+						"start": 36345,
+						"length": 491
+					},
+					"brandon": {
+						"start": 36836,
+						"length": 460
+					},
+					"kevin": {
+						"start": 37296,
+						"length": 458
+					},
+					"dylan": {
+						"start": 37754,
+						"length": 507
+					},
+					"luke": {
+						"start": 38261,
+						"length": 471
+					},
+					"nancy": {
+						"start": 38732,
+						"length": 446
+					},
+					"brenda": {
+						"start": 39178,
+						"length": 539
+					},
+					"jessica": {
+						"start": 39717,
+						"length": 485
+					},
+					"richard": {
+						"start": 40202,
+						"length": 448
+					},
+					"dorothy": {
+						"start": 40650,
+						"length": 465
+					},
+					"penelope": {
+						"start": 41115,
+						"length": 475
+					},
+					"victoria": {
+						"start": 41590,
+						"length": 503
+					},
+					"quinn": {
+						"start": 42093,
+						"length": 489
+					},
+					"levi": {
+						"start": 42582,
+						"length": 456
+					},
+					"lily": {
+						"start": 43038,
+						"length": 492
+					},
+					"hunter": {
+						"start": 43530,
+						"length": 479
+					},
+					"gary": {
+						"start": 44009,
+						"length": 515
+					},
+					"layla": {
+						"start": 44524,
+						"length": 518
+					},
+					"asher": {
+						"start": 45042,
+						"length": 477
+					},
+					"violet": {
+						"start": 45519,
+						"length": 490
+					},
+					"samuel": {
+						"start": 46009,
+						"length": 477
+					},
+					"susan": {
+						"start": 46486,
+						"length": 481
+					},
+					"chloe": {
+						"start": 46967,
+						"length": 469
+					},
+					"landon": {
+						"start": 47436,
+						"length": 483
+					},
+					"andrew": {
+						"start": 47919,
+						"length": 1012
+					},
+					"aria": {
+						"start": 48931,
+						"length": 540
+					},
+					"barbara": {
+						"start": 49471,
+						"length": 516
+					},
+					"aurora": {
+						"start": 49987,
+						"length": 494
+					},
+					"debra": {
+						"start": 50481,
+						"length": 520
+					},
+					"maria": {
+						"start": 51001,
+						"length": 472
+					},
+					"charles": {
+						"start": 51473,
+						"length": 955
+					},
+					"angela": {
+						"start": 52428,
+						"length": 514
+					},
+					"robert": {
+						"start": 52942,
+						"length": 497
+					},
+					"eleanor": {
+						"start": 53439,
+						"length": 486
+					},
+					"hudson": {
+						"start": 53925,
+						"length": 513
+					},
+					"cynthia": {
+						"start": 54438,
+						"length": 505
+					},
+					"brooklyn": {
+						"start": 54943,
+						"length": 498
+					},
+					"janet": {
+						"start": 55441,
+						"length": 479
+					},
+					"isabella": {
+						"start": 55920,
+						"length": 474
+					},
+					"madison": {
+						"start": 56394,
+						"length": 507
+					},
+					"tyler": {
+						"start": 56901,
+						"length": 508
+					},
+					"steven": {
+						"start": 57409,
+						"length": 490
+					},
+					"justin": {
+						"start": 57899,
+						"length": 505
+					},
+					"parker": {
+						"start": 58404,
+						"length": 530
+					},
+					"daniel": {
+						"start": 58934,
+						"length": 448
+					},
+					"ella": {
+						"start": 59382,
+						"length": 471
+					},
+					"madeline": {
+						"start": 59853,
+						"length": 467
+					},
+					"jordan": {
+						"start": 60320,
+						"length": 480
+					},
+					"aidan": {
+						"start": 60800,
+						"length": 466
+					},
+					"jeremiah": {
+						"start": 61266,
+						"length": 494
+					},
+					"jaxon": {
+						"start": 61760,
+						"length": 473
+					},
+					"mark": {
+						"start": 62233,
+						"length": 448
+					},
+					"ariana": {
+						"start": 62681,
+						"length": 461
+					},
+					"hannah": {
+						"start": 63142,
+						"length": 467
+					},
+					"mateo": {
+						"start": 63609,
+						"length": 510
+					},
+					"cameron": {
+						"start": 64119,
+						"length": 471
+					},
+					"jerry": {
+						"start": 64590,
+						"length": 471
+					},
+					"deborah": {
+						"start": 65061,
+						"length": 471
+					},
+					"frank": {
+						"start": 65532,
+						"length": 479
+					},
+					"joseph": {
+						"start": 66011,
+						"length": 471
+					},
+					"ruth": {
+						"start": 66482,
+						"length": 457
+					},
+					"hazel": {
+						"start": 66939,
+						"length": 556
+					},
+					"stella": {
+						"start": 67495,
+						"length": 489
+					},
+					"john": {
+						"start": 67984,
+						"length": 436
+					},
+					"savannah": {
+						"start": 68420,
+						"length": 511
+					},
+					"avery": {
+						"start": 68931,
+						"length": 491
+					},
+					"lillian": {
+						"start": 69422,
+						"length": 473
+					},
+					"patricia": {
+						"start": 69895,
+						"length": 489
+					},
+					"autumn": {
+						"start": 70384,
+						"length": 487
+					},
+					"sandra": {
+						"start": 70871,
+						"length": 480
+					},
+					"jeffrey": {
+						"start": 71351,
+						"length": 497
+					},
+					"henry": {
+						"start": 71848,
+						"length": 486
+					},
+					"jack": {
+						"start": 72334,
+						"length": 915
+					},
+					"adrian": {
+						"start": 73249,
+						"length": 507
+					},
+					"alice": {
+						"start": 73756,
+						"length": 530
+					},
+					"elizabeth": {
+						"start": 74286,
+						"length": 474
+					},
+					"scott": {
+						"start": 74760,
+						"length": 506
+					},
+					"ashley": {
+						"start": 75266,
+						"length": 490
+					},
+					"jason": {
+						"start": 75756,
+						"length": 980
+					},
+					"joshua": {
+						"start": 76736,
+						"length": 939
+					},
+					"megan": {
+						"start": 77675,
+						"length": 497
+					},
+					"allison": {
+						"start": 78172,
+						"length": 476
+					},
+					"gregory": {
+						"start": 78648,
+						"length": 462
+					},
+					"caleb": {
+						"start": 79110,
+						"length": 459
+					},
+					"jayden": {
+						"start": 79569,
+						"length": 477
+					},
+					"carson": {
+						"start": 80046,
+						"length": 497
+					},
+					"owen": {
+						"start": 80543,
+						"length": 501
+					},
+					"addison": {
+						"start": 81044,
+						"length": 520
+					},
+					"amanda": {
+						"start": 81564,
+						"length": 474
+					},
+					"eric": {
+						"start": 82038,
+						"length": 506
+					},
+					"julian": {
+						"start": 82544,
+						"length": 478
+					},
+					"lydia": {
+						"start": 83022,
+						"length": 498
+					},
+					"sadie": {
+						"start": 83520,
+						"length": 480
+					},
+					"nathan": {
+						"start": 84000,
+						"length": 486
+					},
+					"austin": {
+						"start": 84486,
+						"length": 513
+					},
+					"ryan": {
+						"start": 84999,
+						"length": 523
+					},
+					"kennedy": {
+						"start": 85522,
+						"length": 468
+					},
+					"ethan": {
+						"start": 85990,
+						"length": 499
+					},
+					"george": {
+						"start": 86489,
+						"length": 461
+					},
+					"carter": {
+						"start": 86950,
+						"length": 508
+					},
+					"ezra": {
+						"start": 87458,
+						"length": 496
+					},
+					"wyatt": {
+						"start": 87954,
+						"length": 458
+					},
+					"patrick": {
+						"start": 88412,
+						"length": 499
+					},
+					"kathleen": {
+						"start": 88911,
+						"length": 478
+					},
+					"margaret": {
+						"start": 89389,
+						"length": 518
+					},
+					"benjamin": {
+						"start": 89907,
+						"length": 513
+					},
+					"pamela": {
+						"start": 90420,
+						"length": 484
+					},
+					"skylar": {
+						"start": 90904,
+						"length": 510
+					},
+					"lincoln": {
+						"start": 91414,
+						"length": 483
+					},
+					"anna": {
+						"start": 91897,
+						"length": 936
+					},
+					"zachary": {
+						"start": 92833,
+						"length": 505
+					},
+					"nora": {
+						"start": 93338,
+						"length": 477
+					},
+					"anthony": {
+						"start": 93815,
+						"length": 498
+					},
+					"piper": {
+						"start": 94313,
+						"length": 461
+					},
+					"heather": {
+						"start": 94774,
+						"length": 466
+					},
+					"scarlett": {
+						"start": 95240,
+						"length": 488
+					},
+					"donna": {
+						"start": 95728,
+						"length": 498
+					},
+					"evan": {
+						"start": 96226,
+						"length": 438
+					},
+					"catherine": {
+						"start": 96664,
+						"length": 487
+					},
+					"sophie": {
+						"start": 97151,
+						"length": 481
+					},
+					"rebecca": {
+						"start": 97632,
+						"length": 451
+					},
+					"larry": {
+						"start": 98083,
+						"length": 464
+					},
+					"jace": {
+						"start": 98547,
+						"length": 477
+					},
+					"grayson": {
+						"start": 99024,
+						"length": 476
+					},
+					"jacob": {
+						"start": 99500,
+						"length": 500
+					}
+				}
+			}
+		},
+		{
+			"index": 2,
+			"key": "lastName",
+			"storageKind": "uint16",
+			"byteOffset": 1400000,
+			"byteLength": 200000,
+			"dictionary": [
+				"Mendoza",
+				"Parker",
+				"Little",
+				"Campbell",
+				"Sims",
+				"Fields",
+				"Morgan",
+				"Grant",
+				"Chapman",
+				"Austin",
+				"James",
+				"Bowman",
+				"Roberts",
+				"Larson",
+				"Cunningham",
+				"Gardner",
+				"Young",
+				"Hansen",
+				"Wagner",
+				"Hart",
+				"Spencer",
+				"Jackson",
+				"Baker",
+				"Harrison",
+				"Ross",
+				"Ward",
+				"Fleming",
+				"Brewer",
+				"Vasquez",
+				"Bradley",
+				"Smith",
+				"Myers",
+				"Morris",
+				"Allen",
+				"Johnston",
+				"Ruiz",
+				"Dean",
+				"Vargas",
+				"Sanders",
+				"Taylor",
+				"Watson",
+				"Morrison",
+				"Foster",
+				"Duncan",
+				"Davidson",
+				"Oliver",
+				"Kim",
+				"Cook",
+				"Romero",
+				"Wood",
+				"Hill",
+				"Lawson",
+				"Byrd",
+				"Olson",
+				"Gutierrez",
+				"Edwards",
+				"Gilbert",
+				"Green",
+				"Holland",
+				"Fowler",
+				"Payne",
+				"Burke",
+				"Alvarez",
+				"Robinson",
+				"Franklin",
+				"King",
+				"Banks",
+				"Long",
+				"Collins",
+				"Hoffman",
+				"Berry",
+				"Evans",
+				"Jones",
+				"Mitchell",
+				"Riley",
+				"Walker",
+				"Turner",
+				"Ryan",
+				"Armstrong",
+				"Ray",
+				"Jacobs",
+				"Adams",
+				"Carter",
+				"Stewart",
+				"Clark",
+				"Bishop",
+				"Pearson",
+				"Garrett",
+				"Cooper",
+				"Fox",
+				"Montgomery",
+				"Fisher",
+				"Reed",
+				"Wheeler",
+				"Thomas",
+				"Johnson",
+				"Douglas",
+				"Miller",
+				"Welch",
+				"Brooks",
+				"Carpenter",
+				"Richardson",
+				"Williamson",
+				"Fernandez",
+				"Bailey",
+				"Carlson",
+				"Schmidt",
+				"Kelley",
+				"Reid",
+				"Fuller",
+				"Lawrence",
+				"Carr",
+				"Wilson",
+				"Carroll",
+				"Day",
+				"Williams",
+				"Willis",
+				"McCoy",
+				"Richards",
+				"Snyder",
+				"Weaver",
+				"Medina",
+				"White",
+				"Lynch",
+				"Price",
+				"Murphy",
+				"Jensen",
+				"Brown",
+				"Arnold",
+				"Nelson",
+				"Wright",
+				"Hanson",
+				"Martin",
+				"Moore",
+				"Elliott",
+				"Howard",
+				"Castillo",
+				"Moreno",
+				"Graham",
+				"Cox",
+				"Nguyen",
+				"Phillips",
+				"Greene",
+				"Watkins",
+				"Silva",
+				"Gray",
+				"Kelly",
+				"Scott",
+				"George",
+				"Lewis",
+				"Chavez",
+				"Harvey",
+				"Pierce",
+				"Burton",
+				"Andrews",
+				"Rogers",
+				"Lane",
+				"Harper",
+				"Bennett",
+				"Meyer",
+				"Garza",
+				"Frazier",
+				"Anderson",
+				"Peterson",
+				"Stanley",
+				"Peters",
+				"Davis",
+				"Howell",
+				"Hall",
+				"Matthews",
+				"Hughes"
+			],
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 0,
+				"byteLength": 0
+			},
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 1600000,
+					"byteLength": 400000
+				},
+				"indexByKey": {
+					"mendoza": {
+						"start": 0,
+						"length": 580
+					},
+					"parker": {
+						"start": 580,
+						"length": 589
+					},
+					"little": {
+						"start": 1169,
+						"length": 538
+					},
+					"campbell": {
+						"start": 1707,
+						"length": 559
+					},
+					"sims": {
+						"start": 2266,
+						"length": 618
+					},
+					"fields": {
+						"start": 2884,
+						"length": 606
+					},
+					"morgan": {
+						"start": 3490,
+						"length": 555
+					},
+					"grant": {
+						"start": 4045,
+						"length": 599
+					},
+					"chapman": {
+						"start": 4644,
+						"length": 593
+					},
+					"austin": {
+						"start": 5237,
+						"length": 574
+					},
+					"james": {
+						"start": 5811,
+						"length": 543
+					},
+					"bowman": {
+						"start": 6354,
+						"length": 594
+					},
+					"roberts": {
+						"start": 6948,
+						"length": 606
+					},
+					"larson": {
+						"start": 7554,
+						"length": 627
+					},
+					"cunningham": {
+						"start": 8181,
+						"length": 557
+					},
+					"gardner": {
+						"start": 8738,
+						"length": 588
+					},
+					"young": {
+						"start": 9326,
+						"length": 578
+					},
+					"hansen": {
+						"start": 9904,
+						"length": 1166
+					},
+					"wagner": {
+						"start": 11070,
+						"length": 554
+					},
+					"hart": {
+						"start": 11624,
+						"length": 1162
+					},
+					"spencer": {
+						"start": 12786,
+						"length": 569
+					},
+					"jackson": {
+						"start": 13355,
+						"length": 587
+					},
+					"baker": {
+						"start": 13942,
+						"length": 530
+					},
+					"harrison": {
+						"start": 14472,
+						"length": 570
+					},
+					"ross": {
+						"start": 15042,
+						"length": 539
+					},
+					"ward": {
+						"start": 15581,
+						"length": 553
+					},
+					"fleming": {
+						"start": 16134,
+						"length": 562
+					},
+					"brewer": {
+						"start": 16696,
+						"length": 642
+					},
+					"vasquez": {
+						"start": 17338,
+						"length": 608
+					},
+					"bradley": {
+						"start": 17946,
+						"length": 566
+					},
+					"smith": {
+						"start": 18512,
+						"length": 559
+					},
+					"myers": {
+						"start": 19071,
+						"length": 599
+					},
+					"morris": {
+						"start": 19670,
+						"length": 594
+					},
+					"allen": {
+						"start": 20264,
+						"length": 557
+					},
+					"johnston": {
+						"start": 20821,
+						"length": 606
+					},
+					"ruiz": {
+						"start": 21427,
+						"length": 537
+					},
+					"dean": {
+						"start": 21964,
+						"length": 503
+					},
+					"vargas": {
+						"start": 22467,
+						"length": 592
+					},
+					"sanders": {
+						"start": 23059,
+						"length": 606
+					},
+					"taylor": {
+						"start": 23665,
+						"length": 595
+					},
+					"watson": {
+						"start": 24260,
+						"length": 573
+					},
+					"morrison": {
+						"start": 24833,
+						"length": 612
+					},
+					"foster": {
+						"start": 25445,
+						"length": 589
+					},
+					"duncan": {
+						"start": 26034,
+						"length": 582
+					},
+					"davidson": {
+						"start": 26616,
+						"length": 586
+					},
+					"oliver": {
+						"start": 27202,
+						"length": 555
+					},
+					"kim": {
+						"start": 27757,
+						"length": 551
+					},
+					"cook": {
+						"start": 28308,
+						"length": 598
+					},
+					"romero": {
+						"start": 28906,
+						"length": 543
+					},
+					"wood": {
+						"start": 29449,
+						"length": 587
+					},
+					"hill": {
+						"start": 30036,
+						"length": 554
+					},
+					"lawson": {
+						"start": 30590,
+						"length": 573
+					},
+					"byrd": {
+						"start": 31163,
+						"length": 544
+					},
+					"olson": {
+						"start": 31707,
+						"length": 594
+					},
+					"gutierrez": {
+						"start": 32301,
+						"length": 596
+					},
+					"edwards": {
+						"start": 32897,
+						"length": 582
+					},
+					"gilbert": {
+						"start": 33479,
+						"length": 558
+					},
+					"green": {
+						"start": 34037,
+						"length": 572
+					},
+					"holland": {
+						"start": 34609,
+						"length": 539
+					},
+					"fowler": {
+						"start": 35148,
+						"length": 604
+					},
+					"payne": {
+						"start": 35752,
+						"length": 563
+					},
+					"burke": {
+						"start": 36315,
+						"length": 589
+					},
+					"alvarez": {
+						"start": 36904,
+						"length": 565
+					},
+					"robinson": {
+						"start": 37469,
+						"length": 562
+					},
+					"franklin": {
+						"start": 38031,
+						"length": 622
+					},
+					"king": {
+						"start": 38653,
+						"length": 586
+					},
+					"banks": {
+						"start": 39239,
+						"length": 584
+					},
+					"long": {
+						"start": 39823,
+						"length": 552
+					},
+					"collins": {
+						"start": 40375,
+						"length": 574
+					},
+					"hoffman": {
+						"start": 40949,
+						"length": 538
+					},
+					"berry": {
+						"start": 41487,
+						"length": 555
+					},
+					"evans": {
+						"start": 42042,
+						"length": 568
+					},
+					"jones": {
+						"start": 42610,
+						"length": 639
+					},
+					"mitchell": {
+						"start": 43249,
+						"length": 639
+					},
+					"riley": {
+						"start": 43888,
+						"length": 618
+					},
+					"walker": {
+						"start": 44506,
+						"length": 574
+					},
+					"turner": {
+						"start": 45080,
+						"length": 592
+					},
+					"ryan": {
+						"start": 45672,
+						"length": 569
+					},
+					"armstrong": {
+						"start": 46241,
+						"length": 618
+					},
+					"ray": {
+						"start": 46859,
+						"length": 603
+					},
+					"jacobs": {
+						"start": 47462,
+						"length": 610
+					},
+					"adams": {
+						"start": 48072,
+						"length": 552
+					},
+					"carter": {
+						"start": 48624,
+						"length": 581
+					},
+					"stewart": {
+						"start": 49205,
+						"length": 595
+					},
+					"clark": {
+						"start": 49800,
+						"length": 569
+					},
+					"bishop": {
+						"start": 50369,
+						"length": 561
+					},
+					"pearson": {
+						"start": 50930,
+						"length": 579
+					},
+					"garrett": {
+						"start": 51509,
+						"length": 589
+					},
+					"cooper": {
+						"start": 52098,
+						"length": 553
+					},
+					"fox": {
+						"start": 52651,
+						"length": 588
+					},
+					"montgomery": {
+						"start": 53239,
+						"length": 565
+					},
+					"fisher": {
+						"start": 53804,
+						"length": 560
+					},
+					"reed": {
+						"start": 54364,
+						"length": 574
+					},
+					"wheeler": {
+						"start": 54938,
+						"length": 543
+					},
+					"thomas": {
+						"start": 55481,
+						"length": 579
+					},
+					"johnson": {
+						"start": 56060,
+						"length": 596
+					},
+					"douglas": {
+						"start": 56656,
+						"length": 603
+					},
+					"miller": {
+						"start": 57259,
+						"length": 614
+					},
+					"welch": {
+						"start": 57873,
+						"length": 599
+					},
+					"brooks": {
+						"start": 58472,
+						"length": 564
+					},
+					"carpenter": {
+						"start": 59036,
+						"length": 539
+					},
+					"richardson": {
+						"start": 59575,
+						"length": 606
+					},
+					"williamson": {
+						"start": 60181,
+						"length": 614
+					},
+					"fernandez": {
+						"start": 60795,
+						"length": 587
+					},
+					"bailey": {
+						"start": 61382,
+						"length": 615
+					},
+					"carlson": {
+						"start": 61997,
+						"length": 605
+					},
+					"schmidt": {
+						"start": 62602,
+						"length": 574
+					},
+					"kelley": {
+						"start": 63176,
+						"length": 577
+					},
+					"reid": {
+						"start": 63753,
+						"length": 592
+					},
+					"fuller": {
+						"start": 64345,
+						"length": 574
+					},
+					"lawrence": {
+						"start": 64919,
+						"length": 558
+					},
+					"carr": {
+						"start": 65477,
+						"length": 625
+					},
+					"wilson": {
+						"start": 66102,
+						"length": 593
+					},
+					"carroll": {
+						"start": 66695,
+						"length": 570
+					},
+					"day": {
+						"start": 67265,
+						"length": 544
+					},
+					"williams": {
+						"start": 67809,
+						"length": 583
+					},
+					"willis": {
+						"start": 68392,
+						"length": 596
+					},
+					"mccoy": {
+						"start": 68988,
+						"length": 584
+					},
+					"richards": {
+						"start": 69572,
+						"length": 611
+					},
+					"snyder": {
+						"start": 70183,
+						"length": 568
+					},
+					"weaver": {
+						"start": 70751,
+						"length": 557
+					},
+					"medina": {
+						"start": 71308,
+						"length": 602
+					},
+					"white": {
+						"start": 71910,
+						"length": 556
+					},
+					"lynch": {
+						"start": 72466,
+						"length": 567
+					},
+					"price": {
+						"start": 73033,
+						"length": 583
+					},
+					"murphy": {
+						"start": 73616,
+						"length": 613
+					},
+					"jensen": {
+						"start": 74229,
+						"length": 604
+					},
+					"brown": {
+						"start": 74833,
+						"length": 587
+					},
+					"arnold": {
+						"start": 75420,
+						"length": 586
+					},
+					"nelson": {
+						"start": 76006,
+						"length": 579
+					},
+					"wright": {
+						"start": 76585,
+						"length": 573
+					},
+					"hanson": {
+						"start": 77158,
+						"length": 583
+					},
+					"martin": {
+						"start": 77741,
+						"length": 569
+					},
+					"moore": {
+						"start": 78310,
+						"length": 547
+					},
+					"elliott": {
+						"start": 78857,
+						"length": 611
+					},
+					"howard": {
+						"start": 79468,
+						"length": 553
+					},
+					"castillo": {
+						"start": 80021,
+						"length": 546
+					},
+					"moreno": {
+						"start": 80567,
+						"length": 579
+					},
+					"graham": {
+						"start": 81146,
+						"length": 600
+					},
+					"cox": {
+						"start": 81746,
+						"length": 535
+					},
+					"nguyen": {
+						"start": 82281,
+						"length": 564
+					},
+					"phillips": {
+						"start": 82845,
+						"length": 542
+					},
+					"greene": {
+						"start": 83387,
+						"length": 560
+					},
+					"watkins": {
+						"start": 83947,
+						"length": 559
+					},
+					"silva": {
+						"start": 84506,
+						"length": 581
+					},
+					"gray": {
+						"start": 85087,
+						"length": 594
+					},
+					"kelly": {
+						"start": 85681,
+						"length": 566
+					},
+					"scott": {
+						"start": 86247,
+						"length": 593
+					},
+					"george": {
+						"start": 86840,
+						"length": 553
+					},
+					"lewis": {
+						"start": 87393,
+						"length": 561
+					},
+					"chavez": {
+						"start": 87954,
+						"length": 564
+					},
+					"harvey": {
+						"start": 88518,
+						"length": 587
+					},
+					"pierce": {
+						"start": 89105,
+						"length": 568
+					},
+					"burton": {
+						"start": 89673,
+						"length": 542
+					},
+					"andrews": {
+						"start": 90215,
+						"length": 581
+					},
+					"rogers": {
+						"start": 90796,
+						"length": 567
+					},
+					"lane": {
+						"start": 91363,
+						"length": 611
+					},
+					"harper": {
+						"start": 91974,
+						"length": 564
+					},
+					"bennett": {
+						"start": 92538,
+						"length": 569
+					},
+					"meyer": {
+						"start": 93107,
+						"length": 610
+					},
+					"garza": {
+						"start": 93717,
+						"length": 566
+					},
+					"frazier": {
+						"start": 94283,
+						"length": 605
+					},
+					"anderson": {
+						"start": 94888,
+						"length": 554
+					},
+					"peterson": {
+						"start": 95442,
+						"length": 538
+					},
+					"stanley": {
+						"start": 95980,
+						"length": 541
+					},
+					"peters": {
+						"start": 96521,
+						"length": 583
+					},
+					"davis": {
+						"start": 97104,
+						"length": 581
+					},
+					"howell": {
+						"start": 97685,
+						"length": 556
+					},
+					"hall": {
+						"start": 98241,
+						"length": 573
+					},
+					"matthews": {
+						"start": 98814,
+						"length": 597
+					},
+					"hughes": {
+						"start": 99411,
+						"length": 589
+					}
+				}
+			}
+		},
+		{
+			"index": 3,
+			"key": "age",
+			"storageKind": "uint16",
+			"byteOffset": 2000000,
+			"byteLength": 200000,
+			"dictionary": [
+				42,
+				78,
+				75,
+				45,
+				58,
+				29,
+				49,
+				69,
+				85,
+				43,
+				31,
+				87,
+				68,
+				86,
+				23,
+				44,
+				93,
+				33,
+				51,
+				90,
+				72,
+				79,
+				98,
+				74,
+				76,
+				25,
+				22,
+				88,
+				47,
+				35,
+				97,
+				54,
+				24,
+				64,
+				37,
+				63,
+				71,
+				46,
+				92,
+				55,
+				21,
+				91,
+				28,
+				89,
+				41,
+				56,
+				30,
+				40,
+				81,
+				84,
+				19,
+				32,
+				77,
+				60,
+				96,
+				18,
+				61,
+				82,
+				62,
+				38,
+				34,
+				39,
+				52,
+				65,
+				53,
+				57,
+				59,
+				20,
+				95,
+				94,
+				48,
+				73,
+				67,
+				66,
+				80,
+				99,
+				50,
+				36,
+				83,
+				27,
+				26,
+				70
+			],
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 0,
+				"byteLength": 0
+			},
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 2200000,
+					"byteLength": 400000
+				},
+				"indexByKey": {
+					"18": {
+						"start": 0,
+						"length": 1235
+					},
+					"19": {
+						"start": 1235,
+						"length": 1187
+					},
+					"20": {
+						"start": 2422,
+						"length": 1244
+					},
+					"21": {
+						"start": 3666,
+						"length": 1243
+					},
+					"22": {
+						"start": 4909,
+						"length": 1240
+					},
+					"23": {
+						"start": 6149,
+						"length": 1241
+					},
+					"24": {
+						"start": 7390,
+						"length": 1193
+					},
+					"25": {
+						"start": 8583,
+						"length": 1260
+					},
+					"26": {
+						"start": 9843,
+						"length": 1190
+					},
+					"27": {
+						"start": 11033,
+						"length": 1209
+					},
+					"28": {
+						"start": 12242,
+						"length": 1214
+					},
+					"29": {
+						"start": 13456,
+						"length": 1222
+					},
+					"30": {
+						"start": 14678,
+						"length": 1198
+					},
+					"31": {
+						"start": 15876,
+						"length": 1213
+					},
+					"32": {
+						"start": 17089,
+						"length": 1225
+					},
+					"33": {
+						"start": 18314,
+						"length": 1191
+					},
+					"34": {
+						"start": 19505,
+						"length": 1274
+					},
+					"35": {
+						"start": 20779,
+						"length": 1275
+					},
+					"36": {
+						"start": 22054,
+						"length": 1200
+					},
+					"37": {
+						"start": 23254,
+						"length": 1202
+					},
+					"38": {
+						"start": 24456,
+						"length": 1223
+					},
+					"39": {
+						"start": 25679,
+						"length": 1217
+					},
+					"40": {
+						"start": 26896,
+						"length": 1196
+					},
+					"41": {
+						"start": 28092,
+						"length": 1241
+					},
+					"42": {
+						"start": 29333,
+						"length": 1264
+					},
+					"43": {
+						"start": 30597,
+						"length": 1220
+					},
+					"44": {
+						"start": 31817,
+						"length": 1299
+					},
+					"45": {
+						"start": 33116,
+						"length": 1271
+					},
+					"46": {
+						"start": 34387,
+						"length": 1193
+					},
+					"47": {
+						"start": 35580,
+						"length": 1182
+					},
+					"48": {
+						"start": 36762,
+						"length": 1134
+					},
+					"49": {
+						"start": 37896,
+						"length": 1247
+					},
+					"50": {
+						"start": 39143,
+						"length": 1245
+					},
+					"51": {
+						"start": 40388,
+						"length": 1189
+					},
+					"52": {
+						"start": 41577,
+						"length": 1244
+					},
+					"53": {
+						"start": 42821,
+						"length": 1202
+					},
+					"54": {
+						"start": 44023,
+						"length": 1199
+					},
+					"55": {
+						"start": 45222,
+						"length": 1194
+					},
+					"56": {
+						"start": 46416,
+						"length": 1196
+					},
+					"57": {
+						"start": 47612,
+						"length": 1186
+					},
+					"58": {
+						"start": 48798,
+						"length": 1225
+					},
+					"59": {
+						"start": 50023,
+						"length": 1264
+					},
+					"60": {
+						"start": 51287,
+						"length": 1164
+					},
+					"61": {
+						"start": 52451,
+						"length": 1176
+					},
+					"62": {
+						"start": 53627,
+						"length": 1220
+					},
+					"63": {
+						"start": 54847,
+						"length": 1181
+					},
+					"64": {
+						"start": 56028,
+						"length": 1181
+					},
+					"65": {
+						"start": 57209,
+						"length": 1212
+					},
+					"66": {
+						"start": 58421,
+						"length": 1182
+					},
+					"67": {
+						"start": 59603,
+						"length": 1293
+					},
+					"68": {
+						"start": 60896,
+						"length": 1192
+					},
+					"69": {
+						"start": 62088,
+						"length": 1236
+					},
+					"70": {
+						"start": 63324,
+						"length": 1279
+					},
+					"71": {
+						"start": 64603,
+						"length": 1186
+					},
+					"72": {
+						"start": 65789,
+						"length": 1183
+					},
+					"73": {
+						"start": 66972,
+						"length": 1224
+					},
+					"74": {
+						"start": 68196,
+						"length": 1265
+					},
+					"75": {
+						"start": 69461,
+						"length": 1209
+					},
+					"76": {
+						"start": 70670,
+						"length": 1194
+					},
+					"77": {
+						"start": 71864,
+						"length": 1201
+					},
+					"78": {
+						"start": 73065,
+						"length": 1233
+					},
+					"79": {
+						"start": 74298,
+						"length": 1255
+					},
+					"80": {
+						"start": 75553,
+						"length": 1187
+					},
+					"81": {
+						"start": 76740,
+						"length": 1271
+					},
+					"82": {
+						"start": 78011,
+						"length": 1233
+					},
+					"83": {
+						"start": 79244,
+						"length": 1236
+					},
+					"84": {
+						"start": 80480,
+						"length": 1264
+					},
+					"85": {
+						"start": 81744,
+						"length": 1246
+					},
+					"86": {
+						"start": 82990,
+						"length": 1210
+					},
+					"87": {
+						"start": 84200,
+						"length": 1278
+					},
+					"88": {
+						"start": 85478,
+						"length": 1235
+					},
+					"89": {
+						"start": 86713,
+						"length": 1222
+					},
+					"90": {
+						"start": 87935,
+						"length": 1204
+					},
+					"91": {
+						"start": 89139,
+						"length": 1229
+					},
+					"92": {
+						"start": 90368,
+						"length": 1160
+					},
+					"93": {
+						"start": 91528,
+						"length": 1199
+					},
+					"94": {
+						"start": 92727,
+						"length": 1196
+					},
+					"95": {
+						"start": 93923,
+						"length": 1189
+					},
+					"96": {
+						"start": 95112,
+						"length": 1192
+					},
+					"97": {
+						"start": 96304,
+						"length": 1245
+					},
+					"98": {
+						"start": 97549,
+						"length": 1218
+					},
+					"99": {
+						"start": 98767,
+						"length": 1233
+					}
+				}
+			}
+		},
+		{
+			"index": 4,
+			"key": "column5",
+			"storageKind": "int32",
+			"byteOffset": 2600000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 3000000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 5,
+			"key": "column6",
+			"storageKind": "int32",
+			"byteOffset": 3400000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 3800000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 6,
+			"key": "column7",
+			"storageKind": "int32",
+			"byteOffset": 4200000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 4600000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 7,
+			"key": "column8",
+			"storageKind": "int32",
+			"byteOffset": 5000000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 5400000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 8,
+			"key": "column9",
+			"storageKind": "int32",
+			"byteOffset": 5800000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 6200000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 9,
+			"key": "column10",
+			"storageKind": "int32",
+			"byteOffset": 6600000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 7000000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 10,
+			"key": "column11",
+			"storageKind": "int32",
+			"byteOffset": 7400000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 7800000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 11,
+			"key": "column12",
+			"storageKind": "int32",
+			"byteOffset": 8200000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 8600000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 12,
+			"key": "column13",
+			"storageKind": "int32",
+			"byteOffset": 9000000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 9400000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 13,
+			"key": "column14",
+			"storageKind": "int32",
+			"byteOffset": 9800000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 10200000,
+				"byteLength": 400000
+			}
+		},
+		{
+			"index": 14,
+			"key": "column15",
+			"storageKind": "int32",
+			"byteOffset": 10600000,
+			"byteLength": 400000,
+			"dictionary": [],
+			"lowerDictionary": {
+				"postings": {
+					"storageKind": "uint32",
+					"byteOffset": 0,
+					"byteLength": 0
+				},
+				"indexByKey": {}
+			},
+			"sortedIndices": {
+				"storageKind": "uint32",
+				"byteOffset": 11000000,
+				"byteLength": 400000
+			}
+		}
+	]
+}
