@@ -4,7 +4,7 @@ Inspired by [gabrielpetersson/fast-grid](https://github.com/gabrielpetersson/fas
 
 ## Live demo
 
-[Live demo](https://andreastzav.github.io/fasttable/)
+Live demo: [andreastzav.github.io/fasttable/](https://andreastzav.github.io/fasttable/)
 - Load a table preset, e.g. the one with 1 million rows, and play with filtering and sorting. Alternatively you can generate your own table.
 
 ## Project direction
