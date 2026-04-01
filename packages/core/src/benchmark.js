@@ -534,9 +534,6 @@ function validateSortApi(api) {
   }
 
   if (
-    typeof api.getRawFilters !== "function" ||
-    typeof api.setRawFilters !== "function" ||
-    typeof api.runFilterPass !== "function" ||
     typeof api.getRowCount !== "function" ||
     typeof api.buildSortRowsSnapshot !== "function" ||
     typeof api.runSortSnapshotPass !== "function"
@@ -563,7 +560,6 @@ async function runSortBenchmark(options) {
   const now = typeof input.now === "function" ? input.now : defaultNow;
   const reporter = createLineReporter(input.onUpdate);
 
-  const originalFilters = api.getRawFilters();
   const originalSortOptions =
     typeof api.getSortOptions === "function"
       ? normalizeSortOptionFlags(api.getSortOptions())
@@ -578,8 +574,9 @@ async function runSortBenchmark(options) {
   let error = null;
 
   try {
-    const rawFilters = Object.assign({}, originalFilters);
-    const snapshot = api.buildSortRowsSnapshot(rawFilters);
+    // Sorting benchmark always runs on the full table snapshot.
+    // Active UI filters are intentionally ignored here.
+    const snapshot = api.buildSortRowsSnapshot({});
     const snapshotRows =
       snapshot && Array.isArray(snapshot.rows) ? snapshot.rows : [];
     const snapshotCount =
@@ -591,7 +588,7 @@ async function runSortBenchmark(options) {
       `Sort benchmark started on ${formatCount(api.getRowCount())} rows.`
     );
     reporter.append(
-      `Current filtered snapshot size: ${formatCount(snapshotCount)} rows.`
+      `Benchmark snapshot size: ${formatCount(snapshotCount)} rows (full table).`
     );
     reporter.append(
       `Runs: ${rounds} per sort case per direction (desc + asc).`
@@ -727,9 +724,6 @@ async function runSortBenchmark(options) {
     if (typeof api.setSortOptions === "function") {
       api.setSortOptions(originalSortOptions);
     }
-    api.setRawFilters(originalFilters);
-    await delayTick();
-    api.runFilterPass();
   }
 
   return {
