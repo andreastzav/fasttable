@@ -201,7 +201,198 @@ function isIdentitySelection(indices, rowCount) {
   return true;
 }
 
-function resolvePrecomputedSortedColumn(runtime, schema, columnKey, rowCount) {
+function isNumericSortColumnKey(columnKey) {
+  return columnKey !== "firstName" && columnKey !== "lastName";
+}
+
+function compareSortValuesAsc(aValue, bValue, useNumeric) {
+  if (useNumeric) {
+    const aNumber = Number(aValue);
+    const bNumber = Number(bValue);
+    const aFinite = Number.isFinite(aNumber);
+    const bFinite = Number.isFinite(bNumber);
+    if (!aFinite && !bFinite) {
+      return 0;
+    }
+    if (!aFinite) {
+      return 1;
+    }
+    if (!bFinite) {
+      return -1;
+    }
+    if (aNumber < bNumber) {
+      return -1;
+    }
+    if (aNumber > bNumber) {
+      return 1;
+    }
+    return 0;
+  }
+
+  const aText = aValue === undefined || aValue === null ? "" : String(aValue);
+  const bText = bValue === undefined || bValue === null ? "" : String(bValue);
+  if (aText < bText) {
+    return -1;
+  }
+  if (aText > bText) {
+    return 1;
+  }
+  return 0;
+}
+
+function compareDictionaryKeyValuesAsc(aKey, bKey, columnKey) {
+  if (isNumericSortColumnKey(columnKey)) {
+    return compareSortValuesAsc(Number(aKey), Number(bKey), true);
+  }
+  return compareSortValuesAsc(String(aKey), String(bKey), false);
+}
+
+function buildSortedIndexColumn(values, columnKey, rowCount) {
+  const count = Math.max(0, rowCount | 0);
+  const indices = new Uint32Array(count);
+  const sourceValues =
+    values && typeof values.length === "number" ? values : new Array(count);
+  const useNumeric = isNumericSortColumnKey(columnKey);
+
+  for (let i = 0; i < count; i += 1) {
+    indices[i] = i;
+  }
+
+  indices.sort((a, b) => {
+    const compared = compareSortValuesAsc(
+      sourceValues[a],
+      sourceValues[b],
+      useNumeric
+    );
+    if (compared !== 0) {
+      return compared;
+    }
+    return a - b;
+  });
+
+  return indices;
+}
+
+function buildSortedIndexColumnFromDictionaryIds(ids, dictionary, columnKey, rowCount) {
+  const count = Math.max(0, rowCount | 0);
+  const values = new Array(count);
+  const useNumeric = isNumericSortColumnKey(columnKey);
+  for (let i = 0; i < count; i += 1) {
+    const id = Number(ids && ids[i]);
+    const dictValue = Array.isArray(dictionary) ? dictionary[id] : undefined;
+    values[i] = useNumeric
+      ? Number(dictValue)
+      : dictValue === undefined || dictValue === null
+        ? ""
+        : String(dictValue);
+  }
+
+  return buildSortedIndexColumn(values, columnKey, count);
+}
+
+function buildSortedIndexColumnFromLowerDictionary(lowerDictionary, columnKey, rowCount) {
+  if (
+    !lowerDictionary ||
+    typeof lowerDictionary !== "object" ||
+    Array.isArray(lowerDictionary)
+  ) {
+    return null;
+  }
+
+  const keys = Object.keys(lowerDictionary);
+  const count = Math.max(0, rowCount | 0);
+  if (keys.length === 0) {
+    return count === 0 ? new Uint32Array(0) : null;
+  }
+
+  const sortedKeys = keys
+    .slice()
+    .sort((a, b) => compareDictionaryKeyValuesAsc(a, b, columnKey));
+  const output = new Uint32Array(count);
+  let writeIndex = 0;
+
+  for (let i = 0; i < sortedKeys.length; i += 1) {
+    const postings = lowerDictionary[sortedKeys[i]];
+    if (!Array.isArray(postings) && !ArrayBuffer.isView(postings)) {
+      continue;
+    }
+
+    for (let j = 0; j < postings.length; j += 1) {
+      if (writeIndex >= count) {
+        return null;
+      }
+      const rowIndex = Number(postings[j]);
+      if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= count) {
+        return null;
+      }
+      output[writeIndex] = rowIndex >>> 0;
+      writeIndex += 1;
+    }
+  }
+
+  if (writeIndex !== count) {
+    return null;
+  }
+  return output;
+}
+
+function getColumnIndexByKey(schema, columnKey) {
+  const columnKeys = Array.isArray(schema && schema.columnKeys)
+    ? schema.columnKeys
+    : [];
+  return columnKeys.indexOf(columnKey);
+}
+
+function createCliPrecomputedState() {
+  return {
+    rowCount: -1,
+    sortedByKey: Object.create(null),
+    rankByKey: Object.create(null),
+    counts16: null,
+    primary: null,
+    secondary: null,
+  };
+}
+
+function ensureCliPrecomputedState(state, rowCount, countHint) {
+  const expectedRowCount = Math.max(0, Number(rowCount) | 0);
+  const expectedCount = Math.max(0, Number(countHint) | 0);
+
+  if (state.rowCount !== expectedRowCount) {
+    state.rowCount = expectedRowCount;
+    state.sortedByKey = Object.create(null);
+    state.rankByKey = Object.create(null);
+    state.primary = null;
+    state.secondary = null;
+  }
+
+  if (!(state.counts16 instanceof Uint32Array) || state.counts16.length !== 65536) {
+    state.counts16 = new Uint32Array(65536);
+  }
+  if (!(state.primary instanceof Uint32Array) || state.primary.length < expectedCount) {
+    state.primary = new Uint32Array(expectedCount);
+  }
+  if (!(state.secondary instanceof Uint32Array) || state.secondary.length < expectedCount) {
+    state.secondary = new Uint32Array(expectedCount);
+  }
+}
+
+function resolvePrecomputedSortedColumn(
+  runtime,
+  schema,
+  columnKey,
+  rowCount,
+  precomputedState
+) {
+  if (
+    precomputedState &&
+    precomputedState.sortedByKey &&
+    precomputedState.sortedByKey[columnKey] instanceof Uint32Array &&
+    precomputedState.sortedByKey[columnKey].length === rowCount
+  ) {
+    return precomputedState.sortedByKey[columnKey];
+  }
+
   const numericColumnarData = runtime.getNumericColumnarForSave();
   if (!numericColumnarData || typeof numericColumnarData !== "object") {
     return null;
@@ -216,31 +407,284 @@ function resolvePrecomputedSortedColumn(runtime, schema, columnKey, rowCount) {
   if (sortedByKey && sortedByKey[columnKey] instanceof Uint32Array) {
     const column = sortedByKey[columnKey];
     if (column.length === rowCount) {
+      if (precomputedState && precomputedState.sortedByKey) {
+        precomputedState.sortedByKey[columnKey] = column;
+      }
       return column;
     }
   }
 
+  const columnIndex = getColumnIndexByKey(schema, columnKey);
+  if (columnIndex < 0) {
+    return null;
+  }
+
+  const columns = Array.isArray(numericColumnarData.columns)
+    ? numericColumnarData.columns
+    : [];
+  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
+    ? numericColumnarData.dictionaries
+    : [];
+  const lowerDictionaries = Array.isArray(numericColumnarData.lowerDictionaries)
+    ? numericColumnarData.lowerDictionaries
+    : [];
+  const dictionary = dictionaries[columnIndex];
+  const hasDictionary = Array.isArray(dictionary) && dictionary.length > 0;
+
   const sortedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
     ? numericColumnarData.sortedIndexColumns
     : null;
-  if (!sortedColumns) {
+  const fromColumn =
+    sortedColumns && columnIndex >= 0 && columnIndex < sortedColumns.length
+      ? sortedColumns[columnIndex]
+      : null;
+  if (fromColumn instanceof Uint32Array && fromColumn.length === rowCount) {
+    if (precomputedState && precomputedState.sortedByKey) {
+      precomputedState.sortedByKey[columnKey] = fromColumn;
+    }
+    return fromColumn;
+  }
+
+  let built = null;
+  if (hasDictionary) {
+    built = buildSortedIndexColumnFromLowerDictionary(
+      lowerDictionaries[columnIndex],
+      columnKey,
+      rowCount
+    );
+    if (!(built instanceof Uint32Array) || built.length !== rowCount) {
+      built = buildSortedIndexColumnFromDictionaryIds(
+        columns[columnIndex],
+        dictionary,
+        columnKey,
+        rowCount
+      );
+    }
+  } else {
+    built = buildSortedIndexColumn(columns[columnIndex], columnKey, rowCount);
+  }
+
+  if (!(built instanceof Uint32Array) || built.length !== rowCount) {
     return null;
   }
 
-  const columnKeys = Array.isArray(schema && schema.columnKeys)
-    ? schema.columnKeys
+  if (!Array.isArray(numericColumnarData.sortedIndexColumns)) {
+    numericColumnarData.sortedIndexColumns = [];
+  }
+  numericColumnarData.sortedIndexColumns[columnIndex] = built;
+  if (
+    !numericColumnarData.sortedIndexByKey ||
+    typeof numericColumnarData.sortedIndexByKey !== "object" ||
+    Array.isArray(numericColumnarData.sortedIndexByKey)
+  ) {
+    numericColumnarData.sortedIndexByKey = Object.create(null);
+  }
+  numericColumnarData.sortedIndexByKey[columnKey] = built;
+
+  if (precomputedState && precomputedState.sortedByKey) {
+    precomputedState.sortedByKey[columnKey] = built;
+  }
+
+  return built;
+}
+
+function buildRankStateForColumn(
+  runtime,
+  schema,
+  columnKey,
+  rowCount,
+  precomputedState
+) {
+  if (
+    precomputedState &&
+    precomputedState.rankByKey &&
+    precomputedState.rankByKey[columnKey] &&
+    hasIndexCollection(precomputedState.rankByKey[columnKey].rankByRowId) &&
+    precomputedState.rankByKey[columnKey].rankByRowId.length === rowCount
+  ) {
+    return precomputedState.rankByKey[columnKey];
+  }
+
+  const numericColumnarData = runtime.getNumericColumnarForSave();
+  if (!numericColumnarData || typeof numericColumnarData !== "object") {
+    return null;
+  }
+
+  const columnIndex = getColumnIndexByKey(schema, columnKey);
+  if (columnIndex < 0) {
+    return null;
+  }
+
+  const sortedIndices = resolvePrecomputedSortedColumn(
+    runtime,
+    schema,
+    columnKey,
+    rowCount,
+    precomputedState
+  );
+  if (!(sortedIndices instanceof Uint32Array) || sortedIndices.length !== rowCount) {
+    return null;
+  }
+
+  const columns = Array.isArray(numericColumnarData.columns)
+    ? numericColumnarData.columns
     : [];
-  const columnIndex = columnKeys.indexOf(columnKey);
-  if (columnIndex < 0 || columnIndex >= sortedColumns.length) {
-    return null;
+  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
+    ? numericColumnarData.dictionaries
+    : [];
+  const values = columns[columnIndex];
+  const hasDictionary =
+    Array.isArray(dictionaries[columnIndex]) && dictionaries[columnIndex].length > 0;
+  const useNumeric = isNumericSortColumnKey(columnKey) && !hasDictionary;
+
+  const rank32 = new Uint32Array(rowCount);
+  if (rowCount === 0) {
+    const empty = { rankByRowId: rank32, maxRank: 0 };
+    if (precomputedState && precomputedState.rankByKey) {
+      precomputedState.rankByKey[columnKey] = empty;
+    }
+    return empty;
   }
 
-  const column = sortedColumns[columnIndex];
-  if (column instanceof Uint32Array && column.length === rowCount) {
-    return column;
+  const firstRowIndex = Number(sortedIndices[0]) >>> 0;
+  let previousToken = values ? values[firstRowIndex] : undefined;
+  let currentRank = 0;
+  rank32[firstRowIndex] = currentRank;
+
+  for (let i = 1; i < rowCount; i += 1) {
+    const rowIndex = Number(sortedIndices[i]) >>> 0;
+    const nextToken = values ? values[rowIndex] : undefined;
+    let isSame = false;
+
+    if (hasDictionary) {
+      isSame = nextToken === previousToken;
+    } else if (useNumeric) {
+      const previousNumber = Number(previousToken);
+      const nextNumber = Number(nextToken);
+      isSame =
+        (Number.isNaN(previousNumber) && Number.isNaN(nextNumber)) ||
+        previousNumber === nextNumber;
+    } else {
+      isSame = nextToken === previousToken;
+    }
+
+    if (!isSame) {
+      currentRank += 1;
+      previousToken = nextToken;
+    }
+
+    rank32[rowIndex] = currentRank;
   }
 
-  return null;
+  const rankByRowId =
+    currentRank <= 0xffff ? new Uint16Array(rank32) : rank32;
+  const out = { rankByRowId, maxRank: currentRank >>> 0 };
+  if (precomputedState && precomputedState.rankByKey) {
+    precomputedState.rankByKey[columnKey] = out;
+  }
+  return out;
+}
+
+function applyStableRankRadixPass(
+  source,
+  target,
+  count,
+  rankByRowId,
+  maxRank,
+  descending,
+  shift,
+  counts
+) {
+  counts.fill(0);
+
+  for (let i = 0; i < count; i += 1) {
+    const rowIndex = source[i];
+    let rank = rankByRowId[rowIndex] >>> 0;
+    if (descending) {
+      rank = (maxRank - rank) >>> 0;
+    }
+    counts[(rank >>> shift) & 0xffff] += 1;
+  }
+
+  let running = 0;
+  for (let i = 0; i < counts.length; i += 1) {
+    running += counts[i];
+    counts[i] = running;
+  }
+
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const rowIndex = source[i];
+    let rank = rankByRowId[rowIndex] >>> 0;
+    if (descending) {
+      rank = (maxRank - rank) >>> 0;
+    }
+    const bucket = (rank >>> shift) & 0xffff;
+    const pos = --counts[bucket];
+    target[pos] = rowIndex;
+  }
+}
+
+function sortIndicesByPrecomputedRanks(
+  selectedIndices,
+  descriptorList,
+  rankStates,
+  precomputedState
+) {
+  const count = selectedIndices.length;
+  ensureCliPrecomputedState(precomputedState, precomputedState.rowCount, count);
+
+  const primary = precomputedState.primary;
+  const secondary = precomputedState.secondary;
+  const counts = precomputedState.counts16;
+
+  primary.set(selectedIndices);
+  let source = primary;
+  let target = secondary;
+
+  for (let d = descriptorList.length - 1; d >= 0; d -= 1) {
+    const descriptor = descriptorList[d];
+    const rankState = rankStates[d];
+    if (
+      !rankState ||
+      !hasIndexCollection(rankState.rankByRowId) ||
+      rankState.rankByRowId.length < precomputedState.rowCount
+    ) {
+      return null;
+    }
+    const rankByRowId = rankState.rankByRowId;
+    const maxRank = Number(rankState.maxRank) >>> 0;
+    const descending = descriptor.direction === "desc";
+
+    applyStableRankRadixPass(
+      source,
+      target,
+      count,
+      rankByRowId,
+      maxRank,
+      descending,
+      0,
+      counts
+    );
+    const afterLow = source;
+    source = target;
+    target = afterLow;
+
+    applyStableRankRadixPass(
+      source,
+      target,
+      count,
+      rankByRowId,
+      maxRank,
+      descending,
+      16,
+      counts
+    );
+    const afterHigh = source;
+    source = target;
+    target = afterHigh;
+  }
+
+  return source.slice(0, count);
 }
 
 function buildPrecomputedSortedSelection(
@@ -314,15 +758,23 @@ function buildPrecomputedSortedSelection(
   };
 }
 
-function runCliPrecomputedSortSnapshotPass(runtime, schema, rowsSnapshot, descriptors) {
+function runCliPrecomputedSortSnapshotPass(
+  runtime,
+  schema,
+  rowsSnapshot,
+  descriptors,
+  precomputedState
+) {
   const descriptorList = normalizeSortDescriptors(descriptors);
   const fallback = () =>
     runtime.runSortSnapshotPass(rowsSnapshot, descriptorList, "native");
-  if (descriptorList.length !== 1) {
+  if (descriptorList.length === 0) {
     return fallback();
   }
 
   const rowCount = runtime.getRowCount();
+  ensureCliPrecomputedState(precomputedState, rowCount, rowCount);
+
   const sourceIndices =
     Array.isArray(rowsSnapshot) && hasIndexCollection(rowsSnapshot.__rowIndices)
       ? rowsSnapshot.__rowIndices
@@ -336,35 +788,70 @@ function runCliPrecomputedSortSnapshotPass(runtime, schema, rowsSnapshot, descri
   }
 
   const selectedIndices = materializeIndexBuffer(sourceIndices, rowCount);
-  const descriptor = descriptorList[0];
-  const sortedColumn = resolvePrecomputedSortedColumn(
-    runtime,
-    schema,
-    descriptor.columnKey,
-    rowCount
-  );
-  if (!(sortedColumn instanceof Uint32Array)) {
-    return fallback();
+  const coreStartMs = performance.now();
+  let sorted = null;
+
+  if (descriptorList.length === 1) {
+    const descriptor = descriptorList[0];
+    const sortedColumn = resolvePrecomputedSortedColumn(
+      runtime,
+      schema,
+      descriptor.columnKey,
+      rowCount,
+      precomputedState
+    );
+    if (!(sortedColumn instanceof Uint32Array)) {
+      return fallback();
+    }
+    sorted = buildPrecomputedSortedSelection(
+      selectedIndices,
+      sortedColumn,
+      descriptor.direction,
+      rowCount
+    );
+  } else {
+    const rankStates = new Array(descriptorList.length);
+    for (let i = 0; i < descriptorList.length; i += 1) {
+      const descriptor = descriptorList[i];
+      rankStates[i] = buildRankStateForColumn(
+        runtime,
+        schema,
+        descriptor.columnKey,
+        rowCount,
+        precomputedState
+      );
+      if (!rankStates[i]) {
+        return fallback();
+      }
+    }
+
+    const rankSorted = sortIndicesByPrecomputedRanks(
+      selectedIndices,
+      descriptorList,
+      rankStates,
+      precomputedState
+    );
+    if (rankSorted) {
+      sorted = {
+        sortedIndices: rankSorted,
+        dataPath: "indices+precomputed-ranktuple-cli",
+      };
+    }
   }
 
-  const coreStartMs = performance.now();
-  const sorted = buildPrecomputedSortedSelection(
-    selectedIndices,
-    sortedColumn,
-    descriptor.direction,
-    rowCount
-  );
   if (!sorted || !hasIndexCollection(sorted.sortedIndices)) {
     return fallback();
   }
   const sortCoreMs = performance.now() - coreStartMs;
+  const sortModeLabel =
+    descriptorList.length === 1 ? "precomputed" : "precomputed-ranktuple";
 
   return {
     sortMs: sortCoreMs,
     sortCoreMs,
     sortPrepMs: 0,
     sortTotalMs: sortCoreMs,
-    sortMode: "precomputed",
+    sortMode: sortModeLabel,
     sortedCount: sorted.sortedIndices.length,
     descriptors: descriptorList,
     dataPath: sorted.dataPath,
@@ -403,6 +890,7 @@ function buildCliSortModes(runtime) {
 
 function createCliBenchmarkApi(runtime, schema, forcedSortMode) {
   const availableSortModes = buildCliSortModes(runtime);
+  const precomputedState = createCliPrecomputedState();
   const normalizedForcedMode =
     typeof forcedSortMode === "string" && forcedSortMode.trim() !== ""
       ? forcedSortMode.trim().toLowerCase()
@@ -449,7 +937,8 @@ function createCliBenchmarkApi(runtime, schema, forcedSortMode) {
           runtime,
           schema,
           rowsSnapshot,
-          descriptors
+          descriptors,
+          precomputedState
         );
       }
 
