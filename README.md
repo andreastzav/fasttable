@@ -61,6 +61,116 @@ The defaults already selected in the UI are the best-performing choices for this
 
 Table generation uses web workers by default, but filtering and sorting run on the main thread (single thread).
 
+## Headless Runtime (Browser + Node)
+
+The core package now includes a headless runtime facade:
+
+- `createFastTableRuntime` from `@fasttable/core/runtime`
+
+This runtime owns table dataset state and filter/sort orchestration without any DOM dependency, so the same logic can be used from browser adapters and from Node/CLI.
+
+Worker adapters are also available in core:
+
+- Browser: `@fasttable/core/generation-workers-browser`
+- Node: `@fasttable/core/generation-workers-node`
+- Conditional alias: `@fasttable/core/generation-workers`
+
+I/O adapters are available as:
+
+- Browser: `@fasttable/core/io-browser`
+- Node: `@fasttable/core/io-node`
+- Conditional alias: `@fasttable/core/io-adapter`
+
+`@fasttable/core` root export is runtime-neutral; environment-specific adapters are consumed via the explicit/conditional subpaths above.
+
+### Build core dist (no npm needed)
+
+Core is consumed from `packages/core/dist` (not directly from `src`).
+
+Run:
+
+```bash
+node build-core.mjs
+```
+
+### Quick Node CLI benchmark
+
+Use the runtime CLI script:
+
+```bash
+node bench-runtime-cli.mjs --preset 1000000 --bench filtering --current --rounds 3
+```
+
+Optional text output:
+
+```bash
+node bench-runtime-cli.mjs --preset 1000000 --bench both --current --rounds 3 --out runtime-benchmark.txt
+```
+
+Optional worker_threads path in CLI:
+
+```bash
+node bench-runtime-cli.mjs --generate-workers 1000000 --workers 4 --chunk-size 10000 --precompute-sort-workers --bench filtering --current --rounds 3
+```
+
+This uses the Node worker adapter from `@fasttable/core/generation-workers-node` for generation and sort-index precompute.
+
+### Portability tests
+
+Test files are in `tests/`:
+
+- Node parity/roundtrip/smoke tests: `tests/node/`
+- Browser benchmark smoke page: `tests/browser/smoke.html`
+
+See `tests/README.md` for run commands.
+
+## API reference
+
+Stable public API and integration examples are documented in:
+
+- `docs/API.md`
+
+Package release flow:
+
+- `docs/RELEASING_CORE.md`
+
+## Project map (what lives where)
+
+Use this as the quick "which file should I edit?" guide.
+
+- `index.html`: browser app shell + import map + script wiring.
+- `styles.css`: browser UI styling.
+- `app.js`: main browser controller (DOM, state wiring, rendering flow).
+- `generation.js`, `filtering.js`, `sorting.js`, `io.js`: browser adapters that bridge the UI to core package APIs.
+- `generation-workers.js`: thin browser adapter that exposes worker APIs on `window.fastTableGenerationWorkers`.
+- `filtering-benchmark.js`, `sorting-benchmark.js`: browser benchmark UI wrappers.
+- `table-rendering.js`: table render/update helpers used by the browser app.
+- `bench-runtime-cli.mjs`: Node CLI benchmark runner (preset load + benchmark output).
+- `build-core.mjs`: builds `packages/core/dist` from `packages/core/src`.
+
+Core package:
+
+- `packages/core/src/generation.js`: dataset generation + derived representations.
+- `packages/core/src/filtering.js`: filtering controllers and dictionary/planner logic.
+- `packages/core/src/sorting.js`: sort controllers and index/typed comparator paths.
+- `packages/core/src/io.js`: binary codec (format encode/decode + conversion helpers).
+- `packages/core/src/io-browser.js`, `packages/core/src/io-node.js`: runtime-specific I/O adapters.
+- `packages/core/src/runtime.js`: headless runtime facade for dataset/filter/sort orchestration.
+- `packages/core/src/benchmark.js`: filtering and sorting benchmark engines.
+- `packages/core/src/generation-worker-protocol.js`: shared worker message protocol.
+- `packages/core/src/generation-workers-shared.js`: shared worker orchestration logic used by browser and Node adapters.
+- `packages/core/src/generation-workers-browser.js`, `packages/core/src/generation-workers-node.js`: browser/Node worker adapters.
+- `packages/core/src/engine.js`: app-agnostic orchestration facade around runtime adapters.
+- `packages/core/dist/*`: build output consumed by browser import map and package exports.
+
+Data, docs, tests:
+
+- `tables_presets/`: preset datasets (`.bin` + `.json` metadata).
+- `docs/API.md`: stable public API and integration examples.
+- `docs/RELEASING_CORE.md`: release/build flow for `@fasttable/core`.
+- `tests/node/`: Node parity/IO/benchmark/worker smoke tests.
+- `tests/browser/`: browser smoke harness.
+
 ## Productivity credits
 
 This project was built with the help of **Codex** and **ChatGPT**, which were used as productivity multipliers for faster iteration, implementation support, and documentation.

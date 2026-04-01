@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>R2 Multipart Upload</title>
+</head>
+<body>
+  <input type="file" id="fileInput" />
+  <button id="uploadBtn">Upload</button>
+  <pre id="log"></pre>
+
+  <script>
+    const WORKER_URL = "https://fasttableupload.andxfiles.workers.dev";
+    const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB
+
+    const logEl = document.getElementById("log");
+    function log(msg) {
+      logEl.textContent += msg + "\n";
+    }
+
+    async function uploadFile(file) {
+      const key = "tables_presets/" + file.name;
+
+      log("Creating multipart upload...");
+      const createRes = await fetch(`${WORKER_URL}/?action=create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key })
+      });
+
+      if (!createRes.ok) {
+        throw new Error("Create failed: " + await createRes.text());
+      }
+
+      const createData = await createRes.json();
+      const uploadId = createData.uploadId;
+      log("uploadId: " + uploadId);
+
+      const parts = [];
+      const totalParts = Math.ceil(file.size / CHUNK_SIZE);
+
+      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+        const start = (partNumber - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        log(`Uploading part ${partNumber}/${totalParts} ...`);
+
+        const partRes = await fetch(
+          `${WORKER_URL}/?action=part&key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`,
+          {
+            method: "POST",
+            body: chunk
+          }
+        );
+
+        if (!partRes.ok) {
+          const txt = await partRes.text();
+
+          try {
+            await fetch(`${WORKER_URL}/?action=abort`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key, uploadId })
+            });
+          } catch (_) {}
+
+          throw new Error(`Part ${partNumber} failed: ${txt}`);
+        }
+
+        const partData = await partRes.json();
+        parts.push({
+          partNumber,
+          etag: partData.etag
+        });
+
+        const percent = ((end / file.size) * 100).toFixed(1);
+        log(`Done part ${partNumber}. ${percent}%`);
+      }
+
+      log("Completing upload...");
+      const completeRes = await fetch(`${WORKER_URL}/?action=complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          uploadId,
+          parts
+        })
+      });
+
+      if (!completeRes.ok) {
+        throw new Error("Complete failed: " + await completeRes.text());
+      }
+
+      const completeData = await completeRes.json();
+      log("Finished: " + JSON.stringify(completeData, null, 2));
+    }
+
+    document.getElementById("uploadBtn").addEventListener("click", async () => {
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) {
+        alert("Pick a file first");
+        return;
+      }
+
+      logEl.textContent = "";
+      try {
+        await uploadFile(file);
+      } catch (err) {
+        log("ERROR: " + err.message);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+{
+  "name": "@fasttable/core",
+  "description": "FastTable core ESM modules for generation, filtering, sorting, IO, runtime and benchmarks.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "table",
+    "filtering",
+    "sorting",
+    "benchmark",
+    "columnar"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andreastzav/fasttable.git",
+    "directory": "packages/core"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "node ../../build-core.mjs"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./generation": "./dist/generation.js",
+    "./generation-worker-protocol": "./dist/generation-worker-protocol.js",
+    "./generation-workers": {
+      "browser": "./dist/generation-workers-browser.js",
+      "node": "./dist/generation-workers-node.js",
+      "default": "./dist/generation-workers-browser.js"
+    },
+    "./generation-workers-browser": "./dist/generation-workers-browser.js",
+    "./generation-worker-browser-entry": "./dist/generation-worker-browser-entry.js",
+    "./generation-workers-node": "./dist/generation-workers-node.js",
+    "./generation-worker-node-entry": "./dist/generation-worker-node-entry.js",
+    "./engine": "./dist/engine.js",
+    "./runtime": "./dist/runtime.js",
+    "./filtering": "./dist/filtering.js",
+    "./sorting": "./dist/sorting.js",
+    "./benchmark": "./dist/benchmark.js",
+    "./io": "./dist/io.js",
+    "./io-adapter": {
+      "browser": "./dist/io-browser.js",
+      "node": "./dist/io-node.js",
+      "default": "./dist/io-browser.js"
+    },
+    "./io-browser": "./dist/io-browser.js",
+    "./io-node": "./dist/io-node.js"
+  }
+}

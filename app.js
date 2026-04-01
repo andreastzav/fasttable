@@ -1,3 +1,6 @@
+import { createFastTableEngine } from "@fasttable/core/engine";
+import { createFastTableRuntime } from "@fasttable/core/runtime";
+
 const {
   COLUMN_NAMES: columnNames,
   COLUMN_KEYS: columnKeys,
@@ -190,6 +193,7 @@ const precomputedSubsetSortCache = {
   sortedCount: 0,
 };
 const PRECOMPUTED_ORDER_CHECK_MAX_GROUP_SIZE = 16384;
+const benchmarkSortRuntime = createFastTableRuntime();
 
 function formatMs(value) {
   const numeric = Number(value);
@@ -206,7 +210,7 @@ function formatMsFixed3(value) {
     return String(value);
   }
 
-  return numeric.toFixed(2);
+  return numeric.toFixed(3);
 }
 
 function formatPercent(value) {
@@ -950,6 +954,22 @@ function getSortMode() {
   return "native";
 }
 
+function getAvailableSortModes() {
+  if (!sortModeEl) {
+    return ["native"];
+  }
+
+  const modes = [];
+  for (let i = 0; i < sortModeEl.options.length; i += 1) {
+    const optionValue = sortModeEl.options[i].value;
+    if (optionValue) {
+      modes.push(optionValue);
+    }
+  }
+
+  return modes.length > 0 ? modes : ["native"];
+}
+
 function isTimSortAvailable() {
   return (
     typeof window !== "undefined" && typeof window.FastTimSort === "function"
@@ -1178,105 +1198,56 @@ function clearPrecomputedGroupedSortCache() {
   precomputedSubsetSortCache.sortedCount = 0;
 }
 
+function syncBenchmarkSortRuntime(rawFilters) {
+  const runtimeRawFilters =
+    rawFilters && typeof rawFilters === "object" ? rawFilters : readRawFilters();
+  const rowCount = getLoadedRowCount();
+
+  if (rowCount > 0) {
+    const numericColumnarData = getNumericColumnarForSave();
+    if (
+      numericColumnarData &&
+      isValidNumericColumnarData(numericColumnarData)
+    ) {
+      benchmarkSortRuntime.setDataFromNumericColumnar(numericColumnarData);
+    } else {
+      benchmarkSortRuntime.setDataFromRows(ensureObjectRowsAvailable());
+    }
+  } else {
+    benchmarkSortRuntime.setDataFromRows([]);
+  }
+
+  benchmarkSortRuntime.setModeOptions(getModeOptions());
+  benchmarkSortRuntime.setRawFilters(runtimeRawFilters);
+  benchmarkSortRuntime.setSortOptions(getSortRuntimeOptions());
+
+  const selectedSortMode = getSortMode();
+  const runtimeSelectedSortMode =
+    selectedSortMode === "precomputed" ? "native" : selectedSortMode;
+  benchmarkSortRuntime.setSortMode(runtimeSelectedSortMode);
+  return runtimeRawFilters;
+}
+
 function buildRowsSnapshotFromRawFilters(rawFilters) {
-  if (getLoadedRowCount() === 0) {
-    return {
-      rows: [],
-      count: 0,
-      filterCoreMs: 0,
-    };
-  }
-
-  const filterResult = runFiltersWithRawFilters(rawFilters || readRawFilters(), {
-    skipRender: true,
-    skipStatus: true,
-  });
-  if (!filterResult) {
-    return {
-      rows: [],
-      count: 0,
-      filterCoreMs: 0,
-    };
-  }
-  const sourceRows = ensureObjectRowsAvailable();
-  const indices = materializeFilteredIndexArray(
-    filterResult.filteredIndices,
-    sourceRows.length
-  );
-  const rows = new Array(indices.length);
-
-  for (let i = 0; i < indices.length; i += 1) {
-    rows[i] = sourceRows[indices[i]];
-  }
-
-  return {
-    rows,
-    count: rows.length,
-    filterCoreMs: filterResult.coreMs,
-  };
+  const runtimeRawFilters = syncBenchmarkSortRuntime(rawFilters);
+  return benchmarkSortRuntime.buildSortRowsSnapshot(runtimeRawFilters);
 }
 
 function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-  if (
-    !sortingApi ||
-    typeof sortingApi.createSortController !== "function"
-  ) {
-    return null;
-  }
+  syncBenchmarkSortRuntime();
 
-  const rowsToSort = Array.isArray(rowsSnapshot) ? rowsSnapshot.slice() : [];
-  const descriptorList = normalizeSortDescriptorList(descriptors);
-  const controller = sortingApi.createSortController({
-    columnKeys,
-    defaultColumnKey: "index",
-    columnTypeByKey: sortColumnTypeByKey,
-    defaultUseTypedComparator: shouldUseTypedSortComparator(),
-  });
+  const runtimeSortMode =
+    typeof sortMode === "string" && sortMode.trim() !== ""
+      ? sortMode === "precomputed"
+        ? "native"
+        : sortMode
+      : undefined;
 
-  for (let i = 0; i < descriptorList.length; i += 1) {
-    const descriptor = descriptorList[i];
-    controller.cycle(descriptor.columnKey);
-    if (descriptor.direction === "asc") {
-      controller.cycle(descriptor.columnKey);
-    }
-  }
-
-  const sortOptions = getSortRuntimeOptions();
-  const sortTotalStartMs = performance.now();
-  let result = null;
-  if (sortOptions.useIndexSort) {
-    const indices = new Array(rowsToSort.length);
-    for (let i = 0; i < indices.length; i += 1) {
-      indices[i] = i;
-    }
-    const activeDescriptors = controller.getSortDescriptors();
-    const precomputedIndexKeys = buildPrecomputedSortKeyColumns(
-      indices,
-      rowsToSort,
-      activeDescriptors
-    );
-    const runSortOptions = Object.assign({}, sortOptions, {
-      precomputedIndexKeys,
-    });
-    result = controller.sortIndices(indices, rowsToSort, sortMode, runSortOptions);
-  } else {
-    result = controller.sortRows(rowsToSort, sortMode, sortOptions);
-  }
-  const sortTotalMs = performance.now() - sortTotalStartMs;
-  const sortCoreMs = Number(result.durationMs);
-  const sortPrepMs = sortTotalMs - sortCoreMs;
-
-  return {
-    sortMs: sortCoreMs,
-    sortCoreMs,
-    sortPrepMs,
-    sortTotalMs,
-    sortMode: result.sortMode,
-    sortedCount: rowsToSort.length,
-    descriptors: result.effectiveDescriptors,
-    dataPath: result.dataPath,
-    comparatorMode: result.comparatorMode,
-  };
+  return benchmarkSortRuntime.runSortSnapshotPass(
+    rowsSnapshot,
+    descriptors,
+    runtimeSortMode
+  );
 }
 
 function getSortSymbolForState(state) {
@@ -5754,40 +5725,6 @@ function attachFilterListeners() {
   }
 }
 
-function renderCurrentModePreview() {
-  if (getLoadedRowCount() === 0) {
-    clearPreviewBody();
-    return;
-  }
-
-  if (currentLayout === "columnar" && currentColumnarMode === "binary") {
-    renderPreviewFromNumericColumnar(
-      numericColumnarFilterController.getData(),
-      numericColumnarFilterController.getCurrentIndices()
-    );
-    return;
-  }
-
-  if (currentLayout === "columnar") {
-    renderPreviewFromObjectColumnar(
-      objectColumnarFilterController.getData(),
-      objectColumnarFilterController.getCurrentIndices()
-    );
-    return;
-  }
-
-  if (currentRepresentation === "numeric") {
-    renderPreviewFromNumericRowIndices(
-      numericRowFilterController.getData(),
-      numericRowFilterController.getCurrentIndices()
-    );
-    return;
-  }
-
-  const rows = ensureObjectRowsAvailable();
-  renderPreviewFromObjectRowIndices(rows, objectRowFilterController.getCurrentIndices());
-}
-
 function getRequestedRepresentation() {
   return useNumericDataEl && useNumericDataEl.checked ? "numeric" : "object";
 }
@@ -6067,117 +6004,212 @@ function setModeOptions(nextOptions, switchOptions) {
   trySwitchModeUsingExistingRows(switchOptions);
 }
 
-window.fastTableIOBridge = {
-  hasRows() {
-    return getLoadedRowCount() > 0;
-  },
-  getRowCount() {
-    return getLoadedRowCount();
-  },
-  getSchema() {
-    return {
-      columnKeys: columnKeys.slice(),
-      columnNames: columnNames.slice(),
-      baseColumnCount,
-      numericCacheOffset,
-      objectCacheKeys: objectCacheKeys.slice(),
-    };
-  },
-  getNumericColumnarForSave() {
-    if (getLoadedRowCount() === 0) {
-      return null;
-    }
+function getFastTableSchema() {
+  return {
+    columnKeys: columnKeys.slice(),
+    columnNames: columnNames.slice(),
+    baseColumnCount,
+    numericCacheOffset,
+    objectCacheKeys: objectCacheKeys.slice(),
+  };
+}
 
-    if (cachedNumericColumnarData !== null) {
-      cachedNumericColumnarData = ensureNumericColumnarSortedIndices(
-        cachedNumericColumnarData
+function getNumericColumnarForSave() {
+  if (getLoadedRowCount() === 0) {
+    return null;
+  }
+
+  if (cachedNumericColumnarData !== null) {
+    cachedNumericColumnarData = ensureNumericColumnarSortedIndices(
+      cachedNumericColumnarData
+    );
+    return cachedNumericColumnarData;
+  }
+
+  const numericRowsBuild = getOrBuildNumericRows();
+  return getOrBuildNumericColumnarData(numericRowsBuild.numericRows).columnarData;
+}
+
+async function runGenerationAction(options) {
+  const input = options || {};
+  const rowCount = Number.parseInt(String(input.rowCount || "0"), 10);
+  const useWorkerForRun = input.useWorkerGeneration === true;
+
+  generationStatusEl.textContent = "Generating...";
+  clearCurrentDatasetBeforeGeneration();
+  if (useWorkerForRun) {
+    resetWorkerProgressUI();
+  }
+
+  const totalStartMs = performance.now();
+  const generationMetrics = createZeroGenerationMetrics();
+  const usedWorkerPath = useWorkerForRun;
+  generationMetrics.usedWorkerMode = usedWorkerPath;
+
+  try {
+    let generationResult = null;
+    if (useWorkerForRun) {
+      generationResult = await generateRowsWithWorkers(rowCount);
+      setWorkerProgressText(
+        `Workers finished chunk generation. Avg chunk worker total: ${formatMsFixed3(
+          generationResult.avgChunkMs
+        )} ms. Finalizing...`
       );
-      return cachedNumericColumnarData;
+    } else {
+      generationResult = generateRowsOnMainThread(rowCount);
     }
 
-    const numericRowsBuild = getOrBuildNumericRows();
-    return getOrBuildNumericColumnarData(numericRowsBuild.numericRows).columnarData;
-  },
-  applyLoadedColumnarBinaryDataset(
-    loadedRows,
-    loadDurationMs,
-    loadTimingDetails
-  ) {
-    applyLoadedColumnarBinaryDataset(
-      loadedRows,
-      loadDurationMs,
-      loadTimingDetails
-    );
-  },
-  applyLoadedNumericColumnarDataset(
-    numericColumnarData,
-    loadDurationMs,
-    loadTimingDetails
-  ) {
-    applyLoadedNumericColumnarDataset(
-      numericColumnarData,
-      loadDurationMs,
-      loadTimingDetails
-    );
-  },
-  setGenerationError(message) {
-    generationStatusEl.textContent = message;
-  },
-};
-
-window.fastTableBenchmarkApi = {
-  hasData() {
-    return getLoadedRowCount() > 0;
-  },
-  getRowCount() {
-    return getLoadedRowCount();
-  },
-  getModeOptions,
-  setModeOptions,
-  getRawFilters: readRawFilters,
-  setRawFilters: setRawFiltersUI,
-  setSingleFilter: setSingleFilterUI,
-  clearFilters: clearFiltersUI,
-  runFilterPass: applyFiltersAndRender,
-  runSingleFilterPass(columnKey, value, options) {
-    const rawFilters = buildSingleFilterRawFilters(columnKey, value);
-    return runFiltersWithRawFilters(rawFilters, options);
-  },
-  runFilterPassWithRawFilters(rawFilters, options) {
-    return runFiltersWithRawFilters(rawFilters || readRawFilters(), options);
-  },
-  getSortModes() {
-    if (!sortModeEl) {
-      return ["native"];
+    generationMetrics.workerPhaseWallMs =
+      generationResult.metrics.workerPhaseWallMs;
+    generationMetrics.workerWallByIndex =
+      generationResult.metrics.workerWallByIndex || [];
+    if (usedWorkerPath) {
+      generationMetrics.workerRowGenerationMs =
+        generationResult.metrics.rowGenerationMs;
+      generationMetrics.workerRowCacheGenerationMs =
+        generationResult.metrics.rowCacheGenerationMs;
+      generationMetrics.workerNumericTransformMs =
+        generationResult.metrics.numericTransformMs;
+      generationMetrics.workerNumericCacheGenerationMs =
+        generationResult.metrics.numericCacheGenerationMs;
+      generationMetrics.workerColumnarDerivationMs =
+        generationResult.metrics.columnarDerivationMs;
+      generationMetrics.workerColumnarCacheGenerationMs =
+        generationResult.metrics.columnarCacheGenerationMs;
+    } else {
+      generationMetrics.rowGenerationMs = generationResult.metrics.rowGenerationMs;
+      generationMetrics.rowCacheGenerationMs =
+        generationResult.metrics.rowCacheGenerationMs;
     }
 
-    const modes = [];
-    for (let i = 0; i < sortModeEl.options.length; i += 1) {
-      const optionValue = sortModeEl.options[i].value;
-      if (optionValue) {
-        modes.push(optionValue);
+    const finalizeStartMs = performance.now();
+    if (usedWorkerPath) {
+      const usedPrebuiltWorkerDerived = applyWorkerPrebuiltDerivedData(
+        generationResult.derivedData
+      );
+      if (!usedPrebuiltWorkerDerived) {
+        throw new Error("Worker returned invalid derived data.");
       }
+
+      ensureObjectRowsAvailable();
+      setWorkerProgressText("Workers are precomputing sorted indices...");
+      const sortedPrecomputeResult =
+        await precomputeSortedIndicesWithWorkersForCurrentData();
+      generationMetrics.sortedIndexPrecomputeMs =
+        Number(
+          sortedPrecomputeResult &&
+            typeof sortedPrecomputeResult.sortedIndexPrecomputeMs === "number"
+            ? sortedPrecomputeResult.sortedIndexPrecomputeMs
+            : 0
+        ) || 0;
+      generationMetrics.sortedRankPrecomputeMs =
+        Number(
+          sortedPrecomputeResult &&
+            typeof sortedPrecomputeResult.sortedRankPrecomputeMs === "number"
+            ? sortedPrecomputeResult.sortedRankPrecomputeMs
+            : 0
+        ) || 0;
+
+      generationMetrics.numericTransformMs = 0;
+      generationMetrics.numericCacheGenerationMs = 0;
+      generationMetrics.columnarDerivationMs = 0;
+      generationMetrics.columnarCacheGenerationMs = 0;
+    } else {
+      setObjectRowsDataset(generationResult.rows);
+      const derivedMetrics = buildAllDerivedData();
+      generationMetrics.numericTransformMs = derivedMetrics.numericTransformMs;
+      generationMetrics.numericCacheGenerationMs =
+        derivedMetrics.numericCacheGenerationMs;
+      generationMetrics.columnarDerivationMs = derivedMetrics.columnarDerivationMs;
+      generationMetrics.columnarCacheGenerationMs =
+        derivedMetrics.columnarCacheGenerationMs;
+      generationMetrics.sortedIndexPrecomputeMs =
+        Number(derivedMetrics.sortedIndexPrecomputeMs) || 0;
+      generationMetrics.sortedRankPrecomputeMs =
+        Number(derivedMetrics.sortedRankPrecomputeMs) || 0;
     }
 
-    return modes.length > 0 ? modes : ["native"];
+    activateRequestedMode(true);
+    generationMetrics.finalizeMs = performance.now() - finalizeStartMs;
+    generationMetrics.totalMs = performance.now() - totalStartMs;
+
+    setGenerationStatus(rowCount, generationMetrics);
+
+    filterStatusEl.textContent = "No active filters yet.";
+    if (usedWorkerPath) {
+      updateWorkerProgressUI({
+        completedRows: rowCount,
+        totalRows: rowCount,
+        completedChunks: generationResult.completedChunks || 0,
+        totalChunks: generationResult.totalChunks || 0,
+        percent: 100,
+        lastChunkMs: generationResult.avgChunkMs || 0,
+        avgChunkMs: generationResult.avgChunkMs || 0,
+      });
+    }
+
+    return {
+      rowCount,
+      usedWorkerPath,
+      metrics: generationMetrics,
+      generationResult,
+    };
+  } catch (error) {
+    const message = String(error && error.message ? error.message : error);
+    generationStatusEl.textContent = `Generation failed: ${message}`;
+    if (usedWorkerPath) {
+      setWorkerProgressText(`Worker generation is not possible: ${message}`);
+    }
+    throw error;
+  }
+}
+
+const fastTableEngine = createFastTableEngine({
+  adapters: {
+    hasData() {
+      return getLoadedRowCount() > 0;
+    },
+    getRowCount() {
+      return getLoadedRowCount();
+    },
+    getModeOptions,
+    setModeOptions,
+    getRawFilters: readRawFilters,
+    setRawFilters: setRawFiltersUI,
+    setSingleFilter: setSingleFilterUI,
+    clearFilters: clearFiltersUI,
+    runFilterPass: applyFiltersAndRender,
+    runSingleFilterPass(columnKey, value, options) {
+      const rawFilters = buildSingleFilterRawFilters(columnKey, value);
+      return runFiltersWithRawFilters(rawFilters, options);
+    },
+    runFilterPassWithRawFilters(rawFilters, options) {
+      return runFiltersWithRawFilters(rawFilters || readRawFilters(), options);
+    },
+    getSortModes: getAvailableSortModes,
+    getSortMode,
+    getSortOptions: getSortRuntimeOptions,
+    setSortOptions: setSortRuntimeOptions,
+    buildSortRowsSnapshot: buildRowsSnapshotFromRawFilters,
+    runSortSnapshotPass,
+    isTimSortAvailable,
+    getNumericColumnarForSave,
+    applyLoadedColumnarBinaryDataset,
+    applyLoadedNumericColumnarDataset,
+    setGenerationError(message) {
+      generationStatusEl.textContent = message;
+    },
+    generate(generateOptions) {
+      return runGenerationAction(generateOptions);
+    },
   },
-  getSortMode() {
-    return getSortMode();
-  },
-  getSortOptions() {
-    return getSortRuntimeOptions();
-  },
-  setSortOptions(nextOptions) {
-    setSortRuntimeOptions(nextOptions);
-  },
-  buildSortRowsSnapshot(rawFilters) {
-    return buildRowsSnapshotFromRawFilters(rawFilters);
-  },
-  runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-    return runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
-  },
-  isTimSortAvailable,
-};
+});
+
+window.fastTableEngine = fastTableEngine;
+window.fastTableIOBridge = fastTableEngine.createIOBridge({
+  getSchema: getFastTableSchema,
+});
+window.fastTableBenchmarkApi = fastTableEngine.createBenchmarkApi();
 
 renderHeaderAndFilters();
 attachFilterListeners();
@@ -6290,130 +6322,14 @@ generateBtnEl.addEventListener("click", () => {
   const useWorkerForRun = shouldUseWorkerGeneration();
 
   setActionButtonsDisabled(true);
-  generationStatusEl.textContent = "Generating...";
-  clearCurrentDatasetBeforeGeneration();
-  if (useWorkerForRun) {
-    resetWorkerProgressUI();
-  }
-
   requestAnimationFrame(async () => {
-    const totalStartMs = performance.now();
-    const generationMetrics = createZeroGenerationMetrics();
-    const usedWorkerPath = useWorkerForRun;
-    generationMetrics.usedWorkerMode = usedWorkerPath;
-
     try {
-      let generationResult = null;
-      if (useWorkerForRun) {
-        generationResult = await generateRowsWithWorkers(rowCount);
-        setWorkerProgressText(
-          `Workers finished chunk generation. Avg chunk worker total: ${formatMsFixed3(
-            generationResult.avgChunkMs
-          )} ms. Finalizing...`
-        );
-      } else {
-        generationResult = generateRowsOnMainThread(rowCount);
-      }
-
-      generationMetrics.workerPhaseWallMs =
-        generationResult.metrics.workerPhaseWallMs;
-      generationMetrics.workerWallByIndex =
-        generationResult.metrics.workerWallByIndex || [];
-      if (usedWorkerPath) {
-        generationMetrics.workerRowGenerationMs =
-          generationResult.metrics.rowGenerationMs;
-        generationMetrics.workerRowCacheGenerationMs =
-          generationResult.metrics.rowCacheGenerationMs;
-        generationMetrics.workerNumericTransformMs =
-          generationResult.metrics.numericTransformMs;
-        generationMetrics.workerNumericCacheGenerationMs =
-          generationResult.metrics.numericCacheGenerationMs;
-        generationMetrics.workerColumnarDerivationMs =
-          generationResult.metrics.columnarDerivationMs;
-        generationMetrics.workerColumnarCacheGenerationMs =
-          generationResult.metrics.columnarCacheGenerationMs;
-      } else {
-        generationMetrics.rowGenerationMs = generationResult.metrics.rowGenerationMs;
-        generationMetrics.rowCacheGenerationMs =
-          generationResult.metrics.rowCacheGenerationMs;
-      }
-
-      const finalizeStartMs = performance.now();
-      if (usedWorkerPath) {
-        const usedPrebuiltWorkerDerived = applyWorkerPrebuiltDerivedData(
-          generationResult.derivedData
-        );
-        if (!usedPrebuiltWorkerDerived) {
-          throw new Error("Worker returned invalid derived data.");
-        }
-
-        ensureObjectRowsAvailable();
-        setWorkerProgressText("Workers are precomputing sorted indices...");
-        const sortedPrecomputeResult =
-          await precomputeSortedIndicesWithWorkersForCurrentData();
-        generationMetrics.sortedIndexPrecomputeMs =
-          Number(
-            sortedPrecomputeResult &&
-              typeof sortedPrecomputeResult.sortedIndexPrecomputeMs === "number"
-              ? sortedPrecomputeResult.sortedIndexPrecomputeMs
-              : 0
-          ) || 0;
-        generationMetrics.sortedRankPrecomputeMs =
-          Number(
-            sortedPrecomputeResult &&
-              typeof sortedPrecomputeResult.sortedRankPrecomputeMs === "number"
-              ? sortedPrecomputeResult.sortedRankPrecomputeMs
-              : 0
-          ) || 0;
-
-        generationMetrics.numericTransformMs = 0;
-        generationMetrics.numericCacheGenerationMs = 0;
-        generationMetrics.columnarDerivationMs = 0;
-        generationMetrics.columnarCacheGenerationMs = 0;
-      } else {
-        setObjectRowsDataset(generationResult.rows);
-        const derivedMetrics = buildAllDerivedData();
-        generationMetrics.numericTransformMs = derivedMetrics.numericTransformMs;
-        generationMetrics.numericCacheGenerationMs =
-          derivedMetrics.numericCacheGenerationMs;
-        generationMetrics.columnarDerivationMs = derivedMetrics.columnarDerivationMs;
-        generationMetrics.columnarCacheGenerationMs =
-          derivedMetrics.columnarCacheGenerationMs;
-        generationMetrics.sortedIndexPrecomputeMs =
-          Number(derivedMetrics.sortedIndexPrecomputeMs) || 0;
-        generationMetrics.sortedRankPrecomputeMs =
-          Number(derivedMetrics.sortedRankPrecomputeMs) || 0;
-      }
-
-      activateRequestedMode(true);
-      generationMetrics.finalizeMs = performance.now() - finalizeStartMs;
-      generationMetrics.totalMs = performance.now() - totalStartMs;
-
-      setGenerationStatus(rowCount, generationMetrics);
-
-      filterStatusEl.textContent = "No active filters yet.";
-      if (usedWorkerPath) {
-        updateWorkerProgressUI({
-          completedRows: rowCount,
-          totalRows: rowCount,
-          completedChunks: generationResult.completedChunks || 0,
-          totalChunks: generationResult.totalChunks || 0,
-          percent: 100,
-          lastChunkMs: generationResult.avgChunkMs || 0,
-          avgChunkMs: generationResult.avgChunkMs || 0,
-        });
-      }
+      await fastTableEngine.generate({
+        rowCount,
+        useWorkerGeneration: useWorkerForRun,
+      });
     } catch (error) {
-      generationStatusEl.textContent = `Generation failed: ${String(
-        error && error.message ? error.message : error
-      )}`;
-      if (usedWorkerPath) {
-        setWorkerProgressText(
-          `Worker generation is not possible: ${String(
-            error && error.message ? error.message : error
-          )}`
-        );
-      }
+      // runGenerationAction already handles user-visible error messages.
     } finally {
       setActionButtonsDisabled(false);
     }

@@ -321,15 +321,34 @@
       </section>
     </main>
 
-    <script src="./generation.js"></script>
-    <script src="./generation-workers.js"></script>
-    <script src="./filtering.js"></script>
-    <script src="./timsort.js?v=1"></script>
-    <script src="./sorting.js"></script>
-    <script src="./table-rendering.js"></script>
-    <script src="./app.js"></script>
-    <script src="./io.js"></script>
-    <script src="./filtering-benchmark.js"></script>
-    <script src="./sorting-benchmark.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "@fasttable/core": "./packages/core/dist/index.js",
+          "@fasttable/core/generation": "./packages/core/dist/generation.js",
+          "@fasttable/core/generation-worker-protocol": "./packages/core/dist/generation-worker-protocol.js",
+          "@fasttable/core/generation-workers-browser": "./packages/core/dist/generation-workers-browser.js",
+          "@fasttable/core/engine": "./packages/core/dist/engine.js",
+          "@fasttable/core/runtime": "./packages/core/dist/runtime.js",
+          "@fasttable/core/filtering": "./packages/core/dist/filtering.js",
+          "@fasttable/core/sorting": "./packages/core/dist/sorting.js",
+          "@fasttable/core/benchmark": "./packages/core/dist/benchmark.js",
+          "@fasttable/core/io": "./packages/core/dist/io.js",
+          "@fasttable/core/io-browser": "./packages/core/dist/io-browser.js",
+          "@fasttable/core/io-node": "./packages/core/dist/io-node.js"
+        }
+      }
+    </script>
+
+    <script type="module" src="./generation.js"></script>
+    <script type="module" src="./generation-workers.js"></script>
+    <script type="module" src="./filtering.js"></script>
+    <script type="module" src="./timsort.js?v=1"></script>
+    <script type="module" src="./sorting.js"></script>
+    <script type="module" src="./table-rendering.js"></script>
+    <script type="module" src="./app.js"></script>
+    <script type="module" src="./io.js"></script>
+    <script type="module" src="./filtering-benchmark.js"></script>
+    <script type="module" src="./sorting-benchmark.js"></script>
   </body>
 </html>

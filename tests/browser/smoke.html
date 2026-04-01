@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FastTable Browser Smoke</title>
+    <style>
+      body {
+        font-family: Consolas, Menlo, Monaco, monospace;
+        margin: 16px;
+        line-height: 1.4;
+      }
+      #status {
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: #f5f5f5;
+        border: 1px solid #d6d6d6;
+        border-radius: 6px;
+        padding: 10px;
+        max-height: 70vh;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">Running browser smoke tests...</div>
+    <pre id="output"></pre>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "@fasttable/core": "../../packages/core/dist/index.js",
+          "@fasttable/core/generation": "../../packages/core/dist/generation.js",
+          "@fasttable/core/generation-worker-protocol": "../../packages/core/dist/generation-worker-protocol.js",
+          "@fasttable/core/engine": "../../packages/core/dist/engine.js",
+          "@fasttable/core/runtime": "../../packages/core/dist/runtime.js",
+          "@fasttable/core/filtering": "../../packages/core/dist/filtering.js",
+          "@fasttable/core/sorting": "../../packages/core/dist/sorting.js",
+          "@fasttable/core/benchmark": "../../packages/core/dist/benchmark.js",
+          "@fasttable/core/io": "../../packages/core/dist/io.js",
+          "@fasttable/core/io-browser": "../../packages/core/dist/io-browser.js",
+          "@fasttable/core/io-node": "../../packages/core/dist/io-node.js"
+        }
+      }
+    </script>
+    <script type="module" src="./smoke.js"></script>
+  </body>
+</html>
