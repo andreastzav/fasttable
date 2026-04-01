@@ -1,3 +1,5 @@
+import { ensureNumericColumnarSortedIndices } from "./io.js";
+
 function defaultNow() {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
     return performance.now();
@@ -988,20 +990,25 @@ function createGenerationWorkersApi(options) {
     const existingSortedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
       ? numericColumnarData.sortedIndexColumns
       : [];
-    const sortedIndexColumns = new Array(columnCount);
+    const sortedIndexColumns = new Array(columnCount).fill(null);
     const tasks = [];
+    const sortSchema = {
+      baseColumnCount: columnCount,
+      columnKeys: columnKeys.slice(0, columnCount),
+    };
+    let completedColumns = 0;
 
     for (let colIndex = 0; colIndex < columnCount; colIndex += 1) {
-      const dictionary = dictionaries[colIndex];
-      const hasDictionary = Array.isArray(dictionary) && dictionary.length > 0;
-      if (hasDictionary) {
-        sortedIndexColumns[colIndex] = null;
-        continue;
-      }
-
       const existing = existingSortedColumns[colIndex];
       if (existing instanceof Uint32Array && existing.length === rowCount) {
         sortedIndexColumns[colIndex] = existing;
+        completedColumns += 1;
+        continue;
+      }
+
+      const dictionary = dictionaries[colIndex];
+      const hasDictionary = Array.isArray(dictionary) && dictionary.length > 0;
+      if (hasDictionary) {
         continue;
       }
 
@@ -1022,22 +1029,47 @@ function createGenerationWorkersApi(options) {
       sortedIndexColumns[colIndex] = null;
     }
 
-    const totalColumns = tasks.length;
+    const totalColumns = columnCount;
+    const workerTaskCount = tasks.length;
     const startedAtMs = now();
 
-    if (totalColumns === 0) {
-      const sortedIndexByKey = buildSortedIndexByKey(sortedIndexColumns);
+    function finalizeSortedColumns() {
+      numericColumnarData.sortedIndexColumns = sortedIndexColumns;
+      ensureNumericColumnarSortedIndices(numericColumnarData, sortSchema);
+      const finalizedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
+        ? numericColumnarData.sortedIndexColumns.slice(0, columnCount)
+        : sortedIndexColumns;
+      const finalizedByKey = buildSortedIndexByKey(finalizedColumns);
+      let finalizedCount = 0;
+      for (let i = 0; i < finalizedColumns.length; i += 1) {
+        const column = finalizedColumns[i];
+        if (column instanceof Uint32Array && column.length === rowCount) {
+          finalizedCount += 1;
+        }
+      }
+      if (finalizedCount !== totalColumns) {
+        throw new Error("Failed to precompute sorted indices for all columns.");
+      }
+      return {
+        sortedIndexColumns: finalizedColumns,
+        sortedIndexByKey: finalizedByKey,
+        completedColumns: finalizedCount,
+      };
+    }
+
+    if (workerTaskCount === 0) {
+      const finalized = finalizeSortedColumns();
       return Promise.resolve({
-        sortedIndexColumns,
-        sortedIndexByKey,
-        totalColumns: 0,
-        completedColumns: 0,
-        durationMs: 0,
+        sortedIndexColumns: finalized.sortedIndexColumns,
+        sortedIndexByKey: finalized.sortedIndexByKey,
+        totalColumns,
+        completedColumns: finalized.completedColumns,
+        durationMs: now() - startedAtMs,
       });
     }
 
     const requestedWorkerCount = toPositiveInt(runOptions.workerCount, 1);
-    const activeWorkerCount = Math.min(requestedWorkerCount, totalColumns);
+    const activeWorkerCount = Math.min(requestedWorkerCount, workerTaskCount);
     const workerSlots = new Array(activeWorkerCount);
     for (let i = 0; i < activeWorkerCount; i += 1) {
       workerSlots[i] = {
@@ -1048,7 +1080,7 @@ function createGenerationWorkersApi(options) {
 
     const seenTasks = new Set();
     let nextTaskIndex = 0;
-    let completedColumns = 0;
+    let completedWorkerTasks = 0;
     let finishedWorkers = 0;
     let settled = false;
     let totalWorkerSortMs = 0;
@@ -1073,21 +1105,30 @@ function createGenerationWorkersApi(options) {
           return;
         }
 
-        if (finishedWorkers < workerSlots.length || completedColumns < totalColumns) {
+        if (
+          finishedWorkers < workerSlots.length ||
+          completedWorkerTasks < workerTaskCount
+        ) {
           return;
         }
 
-        settled = true;
-        terminateWorkers(workerSlots);
-        const sortedIndexByKey = buildSortedIndexByKey(sortedIndexColumns);
-        resolve({
-          sortedIndexColumns,
-          sortedIndexByKey,
-          totalColumns,
-          completedColumns,
-          durationMs: now() - startedAtMs,
-          workerSortMs: totalWorkerSortMs,
-        });
+        try {
+          const finalized = finalizeSortedColumns();
+          completedColumns = finalized.completedColumns;
+          settled = true;
+          terminateWorkers(workerSlots);
+          emitSortProgress(-1, 0);
+          resolve({
+            sortedIndexColumns: finalized.sortedIndexColumns,
+            sortedIndexByKey: finalized.sortedIndexByKey,
+            totalColumns,
+            completedColumns,
+            durationMs: now() - startedAtMs,
+            workerSortMs: totalWorkerSortMs,
+          });
+        } catch (error) {
+          rejectOnce(error);
+        }
       }
 
       function rejectOnce(error) {
@@ -1192,6 +1233,7 @@ function createGenerationWorkersApi(options) {
             }
 
             sortedIndexColumns[colIndex] = sortedIndices;
+            completedWorkerTasks += 1;
             completedColumns += 1;
             totalWorkerSortMs += Number(message.durationMs) || 0;
             emitSortProgress(colIndex, Number(message.durationMs) || 0);

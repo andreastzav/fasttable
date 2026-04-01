@@ -613,10 +613,14 @@ function createTypedArrayFromBinarySource(
 }
 
 function createColumnarBinaryExportPayload(numericColumnarData, schema) {
-  const rowCount = numericColumnarData.rowCount;
-  const columns = numericColumnarData.columns;
-  const dictionaries = numericColumnarData.dictionaries || [];
-  const lowerDictionaries = numericColumnarData.lowerDictionaries || [];
+  const normalizedNumericColumnarData = ensureNumericColumnarSortedIndices(
+    numericColumnarData,
+    schema
+  );
+  const rowCount = normalizedNumericColumnarData.rowCount;
+  const columns = normalizedNumericColumnarData.columns;
+  const dictionaries = normalizedNumericColumnarData.dictionaries || [];
+  const lowerDictionaries = normalizedNumericColumnarData.lowerDictionaries || [];
   const columnMetadata = new Array(schema.baseColumnCount);
   const parts = [];
   let currentOffset = 0;
@@ -627,7 +631,7 @@ function createColumnarBinaryExportPayload(numericColumnarData, schema) {
       throw new Error("Cannot export non-binary column in numeric dataset.");
     }
     const storageKind = getStorageKindFromNumericColumn(
-      numericColumnarData,
+      normalizedNumericColumnarData,
       colIndex
     );
     const alignment =
@@ -663,11 +667,6 @@ function createColumnarBinaryExportPayload(numericColumnarData, schema) {
     currentOffset += typedColumn.byteLength;
 
     if (hasDictionary) {
-      metadata.sortedIndices = {
-        storageKind: "uint32",
-        byteOffset: 0,
-        byteLength: 0,
-      };
       const lowerDictionaryPostings = resolveLowerDictionaryPostings(
         dictionary,
         lowerDictionaries[colIndex],
@@ -707,31 +706,32 @@ function createColumnarBinaryExportPayload(numericColumnarData, schema) {
         },
         indexByKey: createEmptyLowerDictionaryPostings(),
       };
-      const sortedIndices = getOrBuildSortedIndexColumnForExport(
-        numericColumnarData,
-        colIndex,
-        rowCount,
-        schema.columnKeys[colIndex]
-      );
-      const sortedAlignedOffset = alignOffset(currentOffset, 4);
-      if (sortedAlignedOffset > currentOffset) {
-        parts.push(new Uint8Array(sortedAlignedOffset - currentOffset));
-        currentOffset = sortedAlignedOffset;
-      }
-
-      const sortedIndicesByteView = new Uint8Array(
-        sortedIndices.buffer,
-        sortedIndices.byteOffset,
-        sortedIndices.byteLength
-      );
-      parts.push(sortedIndicesByteView);
-      metadata.sortedIndices = {
-        storageKind: "uint32",
-        byteOffset: currentOffset,
-        byteLength: sortedIndices.byteLength,
-      };
-      currentOffset += sortedIndices.byteLength;
     }
+
+    const sortedIndices = getOrBuildSortedIndexColumnForExport(
+      normalizedNumericColumnarData,
+      colIndex,
+      rowCount,
+      schema.columnKeys[colIndex]
+    );
+    const sortedAlignedOffset = alignOffset(currentOffset, 4);
+    if (sortedAlignedOffset > currentOffset) {
+      parts.push(new Uint8Array(sortedAlignedOffset - currentOffset));
+      currentOffset = sortedAlignedOffset;
+    }
+
+    const sortedIndicesByteView = new Uint8Array(
+      sortedIndices.buffer,
+      sortedIndices.byteOffset,
+      sortedIndices.byteLength
+    );
+    parts.push(sortedIndicesByteView);
+    metadata.sortedIndices = {
+      storageKind: "uint32",
+      byteOffset: currentOffset,
+      byteLength: sortedIndices.byteLength,
+    };
+    currentOffset += sortedIndices.byteLength;
 
     columnMetadata[colIndex] = metadata;
   }
@@ -932,6 +932,34 @@ function decodeColumnarBinaryData(metadata, binaryBuffer, schema) {
     const hasDictionary =
       Array.isArray(dictionaries[colIndex]) &&
       dictionaries[colIndex].length > 0;
+    if (
+      !sortedIndicesMeta ||
+      typeof sortedIndicesMeta !== "object" ||
+      sortedIndicesMeta.storageKind !== "uint32"
+    ) {
+      throw new Error("Missing sorted indices metadata.");
+    }
+    const sortedByteOffset = Number(sortedIndicesMeta.byteOffset);
+    const sortedByteLength = Number(sortedIndicesMeta.byteLength);
+    const expectedSortedByteLength = rowCount * 4;
+    if (
+      !Number.isInteger(sortedByteOffset) ||
+      sortedByteOffset < 0 ||
+      !Number.isInteger(sortedByteLength) ||
+      sortedByteLength !== expectedSortedByteLength
+    ) {
+      throw new Error("Invalid sorted indices byte range metadata.");
+    }
+    if (sortedByteOffset + sortedByteLength > resolvedBinarySource.byteLength) {
+      throw new Error("Sorted indices range is out of binary bounds.");
+    }
+    sortedIndexColumns[colIndex] = createTypedArrayFromBinarySource(
+      Uint32Array,
+      resolvedBinarySource,
+      sortedByteOffset,
+      rowCount,
+      "Sorted indices range is out of binary bounds."
+    );
 
     if (hasDictionary) {
       const ids = values;
@@ -952,39 +980,7 @@ function decodeColumnarBinaryData(metadata, binaryBuffer, schema) {
       }
 
       lowerDictionaries[colIndex] = postings;
-      sortedIndexColumns[colIndex] = null;
     } else {
-      if (
-        !sortedIndicesMeta ||
-        typeof sortedIndicesMeta !== "object" ||
-        sortedIndicesMeta.storageKind !== "uint32"
-      ) {
-        throw new Error("Missing sorted indices metadata for non-dictionary column.");
-      }
-      const sortedByteOffset = Number(sortedIndicesMeta.byteOffset);
-      const sortedByteLength = Number(sortedIndicesMeta.byteLength);
-      const expectedSortedByteLength = rowCount * 4;
-      if (
-        !Number.isInteger(sortedByteOffset) ||
-        sortedByteOffset < 0 ||
-        !Number.isInteger(sortedByteLength) ||
-        sortedByteLength !== expectedSortedByteLength
-      ) {
-        throw new Error("Invalid sorted indices byte range metadata.");
-      }
-      if (
-        sortedByteOffset + sortedByteLength > resolvedBinarySource.byteLength
-      ) {
-        throw new Error("Sorted indices range is out of binary bounds.");
-      }
-      sortedIndexColumns[colIndex] = createTypedArrayFromBinarySource(
-        Uint32Array,
-        resolvedBinarySource,
-        sortedByteOffset,
-        rowCount,
-        "Sorted indices range is out of binary bounds."
-      );
-
       for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
         cacheCol[rowIndex] = String(values[rowIndex]).toLowerCase();
       }
