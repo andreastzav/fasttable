@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createFastTableRuntime } from "./packages/core/dist/runtime.js";
 import { loadColumnarBinaryPreset } from "./packages/core/dist/io-node.js";
+import { ensureNumericColumnarSortedIndices } from "./packages/core/dist/io.js";
 import { fastTableGenerationWorkersNodeApi } from "./packages/core/dist/generation-workers-node.js";
 import {
   runFilteringBenchmark,
@@ -205,137 +206,6 @@ function isNumericSortColumnKey(columnKey) {
   return columnKey !== "firstName" && columnKey !== "lastName";
 }
 
-function compareSortValuesAsc(aValue, bValue, useNumeric) {
-  if (useNumeric) {
-    const aNumber = Number(aValue);
-    const bNumber = Number(bValue);
-    const aFinite = Number.isFinite(aNumber);
-    const bFinite = Number.isFinite(bNumber);
-    if (!aFinite && !bFinite) {
-      return 0;
-    }
-    if (!aFinite) {
-      return 1;
-    }
-    if (!bFinite) {
-      return -1;
-    }
-    if (aNumber < bNumber) {
-      return -1;
-    }
-    if (aNumber > bNumber) {
-      return 1;
-    }
-    return 0;
-  }
-
-  const aText = aValue === undefined || aValue === null ? "" : String(aValue);
-  const bText = bValue === undefined || bValue === null ? "" : String(bValue);
-  if (aText < bText) {
-    return -1;
-  }
-  if (aText > bText) {
-    return 1;
-  }
-  return 0;
-}
-
-function compareDictionaryKeyValuesAsc(aKey, bKey, columnKey) {
-  if (isNumericSortColumnKey(columnKey)) {
-    return compareSortValuesAsc(Number(aKey), Number(bKey), true);
-  }
-  return compareSortValuesAsc(String(aKey), String(bKey), false);
-}
-
-function buildSortedIndexColumn(values, columnKey, rowCount) {
-  const count = Math.max(0, rowCount | 0);
-  const indices = new Uint32Array(count);
-  const sourceValues =
-    values && typeof values.length === "number" ? values : new Array(count);
-  const useNumeric = isNumericSortColumnKey(columnKey);
-
-  for (let i = 0; i < count; i += 1) {
-    indices[i] = i;
-  }
-
-  indices.sort((a, b) => {
-    const compared = compareSortValuesAsc(
-      sourceValues[a],
-      sourceValues[b],
-      useNumeric
-    );
-    if (compared !== 0) {
-      return compared;
-    }
-    return a - b;
-  });
-
-  return indices;
-}
-
-function buildSortedIndexColumnFromDictionaryIds(ids, dictionary, columnKey, rowCount) {
-  const count = Math.max(0, rowCount | 0);
-  const values = new Array(count);
-  const useNumeric = isNumericSortColumnKey(columnKey);
-  for (let i = 0; i < count; i += 1) {
-    const id = Number(ids && ids[i]);
-    const dictValue = Array.isArray(dictionary) ? dictionary[id] : undefined;
-    values[i] = useNumeric
-      ? Number(dictValue)
-      : dictValue === undefined || dictValue === null
-        ? ""
-        : String(dictValue);
-  }
-
-  return buildSortedIndexColumn(values, columnKey, count);
-}
-
-function buildSortedIndexColumnFromLowerDictionary(lowerDictionary, columnKey, rowCount) {
-  if (
-    !lowerDictionary ||
-    typeof lowerDictionary !== "object" ||
-    Array.isArray(lowerDictionary)
-  ) {
-    return null;
-  }
-
-  const keys = Object.keys(lowerDictionary);
-  const count = Math.max(0, rowCount | 0);
-  if (keys.length === 0) {
-    return count === 0 ? new Uint32Array(0) : null;
-  }
-
-  const sortedKeys = keys
-    .slice()
-    .sort((a, b) => compareDictionaryKeyValuesAsc(a, b, columnKey));
-  const output = new Uint32Array(count);
-  let writeIndex = 0;
-
-  for (let i = 0; i < sortedKeys.length; i += 1) {
-    const postings = lowerDictionary[sortedKeys[i]];
-    if (!Array.isArray(postings) && !ArrayBuffer.isView(postings)) {
-      continue;
-    }
-
-    for (let j = 0; j < postings.length; j += 1) {
-      if (writeIndex >= count) {
-        return null;
-      }
-      const rowIndex = Number(postings[j]);
-      if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= count) {
-        return null;
-      }
-      output[writeIndex] = rowIndex >>> 0;
-      writeIndex += 1;
-    }
-  }
-
-  if (writeIndex !== count) {
-    return null;
-  }
-  return output;
-}
-
 function getColumnIndexByKey(schema, columnKey) {
   const columnKeys = Array.isArray(schema && schema.columnKeys)
     ? schema.columnKeys
@@ -397,6 +267,7 @@ function resolvePrecomputedSortedColumn(
   if (!numericColumnarData || typeof numericColumnarData !== "object") {
     return null;
   }
+  ensureNumericColumnarSortedIndices(numericColumnarData, schema);
 
   const sortedByKey =
     numericColumnarData.sortedIndexByKey &&
@@ -419,18 +290,6 @@ function resolvePrecomputedSortedColumn(
     return null;
   }
 
-  const columns = Array.isArray(numericColumnarData.columns)
-    ? numericColumnarData.columns
-    : [];
-  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
-    ? numericColumnarData.dictionaries
-    : [];
-  const lowerDictionaries = Array.isArray(numericColumnarData.lowerDictionaries)
-    ? numericColumnarData.lowerDictionaries
-    : [];
-  const dictionary = dictionaries[columnIndex];
-  const hasDictionary = Array.isArray(dictionary) && dictionary.length > 0;
-
   const sortedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
     ? numericColumnarData.sortedIndexColumns
     : null;
@@ -444,48 +303,7 @@ function resolvePrecomputedSortedColumn(
     }
     return fromColumn;
   }
-
-  let built = null;
-  if (hasDictionary) {
-    built = buildSortedIndexColumnFromLowerDictionary(
-      lowerDictionaries[columnIndex],
-      columnKey,
-      rowCount
-    );
-    if (!(built instanceof Uint32Array) || built.length !== rowCount) {
-      built = buildSortedIndexColumnFromDictionaryIds(
-        columns[columnIndex],
-        dictionary,
-        columnKey,
-        rowCount
-      );
-    }
-  } else {
-    built = buildSortedIndexColumn(columns[columnIndex], columnKey, rowCount);
-  }
-
-  if (!(built instanceof Uint32Array) || built.length !== rowCount) {
-    return null;
-  }
-
-  if (!Array.isArray(numericColumnarData.sortedIndexColumns)) {
-    numericColumnarData.sortedIndexColumns = [];
-  }
-  numericColumnarData.sortedIndexColumns[columnIndex] = built;
-  if (
-    !numericColumnarData.sortedIndexByKey ||
-    typeof numericColumnarData.sortedIndexByKey !== "object" ||
-    Array.isArray(numericColumnarData.sortedIndexByKey)
-  ) {
-    numericColumnarData.sortedIndexByKey = Object.create(null);
-  }
-  numericColumnarData.sortedIndexByKey[columnKey] = built;
-
-  if (precomputedState && precomputedState.sortedByKey) {
-    precomputedState.sortedByKey[columnKey] = built;
-  }
-
-  return built;
+  return null;
 }
 
 function buildRankStateForColumn(

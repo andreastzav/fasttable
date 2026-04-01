@@ -18,7 +18,10 @@ import {
   precomputeDictionaryKeySearchState,
 } from "./filtering.js";
 import { createSortController, getAvailableSortModes } from "./sorting.js";
-import { convertNumericColumnarDataToObjectRows } from "./io.js";
+import {
+  convertNumericColumnarDataToObjectRows,
+  ensureNumericColumnarSortedIndices,
+} from "./io.js";
 
 function defaultNow() {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -504,7 +507,10 @@ function createFastTableRuntime(options) {
       return null;
     }
 
-    const numeric = ensureNumericColumnarData();
+    const numeric = ensureNumericColumnarSortedIndices(
+      ensureNumericColumnarData(),
+      getSchema()
+    );
     const sortedColumns = Array.isArray(numeric.sortedIndexColumns)
       ? numeric.sortedIndexColumns
       : null;

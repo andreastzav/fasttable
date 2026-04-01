@@ -275,6 +275,31 @@ function compareSortValuesAsc(aValue, bValue, columnKind) {
   return 0;
 }
 
+function isNumericSortColumnKey(columnKey, dictionary) {
+  if (columnKey === "firstName" || columnKey === "lastName") {
+    return false;
+  }
+
+  if (Array.isArray(dictionary) && dictionary.length > 0) {
+    const probeCount = Math.min(dictionary.length, 16);
+    for (let i = 0; i < probeCount; i += 1) {
+      if (typeof dictionary[i] !== "number") {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+function compareDictionaryKeyValuesAsc(aKey, bKey, columnKey) {
+  if (isNumericSortColumnKey(columnKey)) {
+    return compareSortValuesAsc(Number(aKey), Number(bKey), "float");
+  }
+
+  return compareSortValuesAsc(aKey, bKey, "string");
+}
+
 function buildSortedIndexColumn(values, columnKind, rowCount) {
   const count = Math.max(0, rowCount | 0);
   const indices = new Uint32Array(count);
@@ -295,6 +320,176 @@ function buildSortedIndexColumn(values, columnKind, rowCount) {
   });
 
   return indices;
+}
+
+function buildSortedIndexColumnFromLowerDictionary(
+  lowerDictionary,
+  columnKey,
+  rowCount
+) {
+  if (
+    !lowerDictionary ||
+    typeof lowerDictionary !== "object" ||
+    Array.isArray(lowerDictionary)
+  ) {
+    return null;
+  }
+
+  const keys = Object.keys(lowerDictionary);
+  const count = Math.max(0, rowCount | 0);
+  if (keys.length === 0) {
+    return count === 0 ? new Uint32Array(0) : null;
+  }
+
+  const sortedKeys = keys
+    .slice()
+    .sort((a, b) => compareDictionaryKeyValuesAsc(a, b, columnKey));
+  const output = new Uint32Array(count);
+  let writeIndex = 0;
+
+  for (let i = 0; i < sortedKeys.length; i += 1) {
+    const postings = lowerDictionary[sortedKeys[i]];
+    if (!Array.isArray(postings) && !ArrayBuffer.isView(postings)) {
+      continue;
+    }
+
+    for (let j = 0; j < postings.length; j += 1) {
+      if (writeIndex >= count) {
+        return null;
+      }
+
+      const rowIndex = Number(postings[j]);
+      if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= count) {
+        return null;
+      }
+
+      output[writeIndex] = rowIndex >>> 0;
+      writeIndex += 1;
+    }
+  }
+
+  if (writeIndex !== count) {
+    return null;
+  }
+
+  return output;
+}
+
+function buildSortedIndexColumnFromDictionaryIds(ids, dictionary, columnKey, rowCount) {
+  if (!ids || typeof ids.length !== "number") {
+    return new Uint32Array(0);
+  }
+
+  const count = Math.max(0, rowCount | 0);
+  const values = new Array(count);
+  const useNumericValues = isNumericSortColumnKey(columnKey, dictionary);
+
+  for (let i = 0; i < count; i += 1) {
+    const id = Number(ids[i]);
+    const dictValue = Array.isArray(dictionary) ? dictionary[id] : undefined;
+    if (useNumericValues) {
+      values[i] = Number(dictValue);
+    } else {
+      values[i] =
+        dictValue === undefined || dictValue === null ? "" : String(dictValue);
+    }
+  }
+
+  return buildSortedIndexColumn(
+    values,
+    useNumericValues ? "float" : "string",
+    count
+  );
+}
+
+function ensureNumericColumnarSortedIndices(numericColumnarData, schema) {
+  if (!numericColumnarData || typeof numericColumnarData !== "object") {
+    return numericColumnarData;
+  }
+
+  const columns = Array.isArray(numericColumnarData.columns)
+    ? numericColumnarData.columns
+    : [];
+  const schemaColumnKeys = Array.isArray(schema && schema.columnKeys)
+    ? schema.columnKeys
+    : [];
+  const schemaBaseCount =
+    schema && Number.isInteger(schema.baseColumnCount)
+      ? Math.max(0, schema.baseColumnCount | 0)
+      : schemaColumnKeys.length;
+  const baseCount = Math.min(
+    columns.length,
+    schemaBaseCount > 0 ? schemaBaseCount : columns.length
+  );
+  const rowCount = Math.max(0, Number(numericColumnarData.rowCount) | 0);
+  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
+    ? numericColumnarData.dictionaries
+    : [];
+  const lowerDictionaries = Array.isArray(numericColumnarData.lowerDictionaries)
+    ? numericColumnarData.lowerDictionaries
+    : [];
+  const columnKinds = Array.isArray(numericColumnarData.columnKinds)
+    ? numericColumnarData.columnKinds
+    : [];
+  const existingSortedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
+    ? numericColumnarData.sortedIndexColumns
+    : null;
+  const sortedColumns =
+    existingSortedColumns && existingSortedColumns.length >= baseCount
+      ? existingSortedColumns
+      : new Array(baseCount);
+  const sortedByKey = createEmptyLowerDictionaryPostings();
+
+  for (let colIndex = 0; colIndex < baseCount; colIndex += 1) {
+    const columnKey =
+      typeof schemaColumnKeys[colIndex] === "string" && schemaColumnKeys[colIndex] !== ""
+        ? schemaColumnKeys[colIndex]
+        : `column${colIndex + 1}`;
+    const existing = sortedColumns[colIndex];
+    if (existing instanceof Uint32Array && existing.length === rowCount) {
+      sortedByKey[columnKey] = existing;
+      continue;
+    }
+
+    const dictionary = Array.isArray(dictionaries[colIndex])
+      ? dictionaries[colIndex]
+      : [];
+    const hasDictionary = dictionary.length > 0;
+    let nextSorted = null;
+
+    if (hasDictionary) {
+      nextSorted = buildSortedIndexColumnFromLowerDictionary(
+        lowerDictionaries[colIndex],
+        columnKey,
+        rowCount
+      );
+      if (!(nextSorted instanceof Uint32Array) || nextSorted.length !== rowCount) {
+        nextSorted = buildSortedIndexColumnFromDictionaryIds(
+          columns[colIndex],
+          dictionary,
+          columnKey,
+          rowCount
+        );
+      }
+    } else {
+      nextSorted = buildSortedIndexColumn(
+        columns[colIndex],
+        columnKinds[colIndex],
+        rowCount
+      );
+    }
+
+    if (nextSorted instanceof Uint32Array && nextSorted.length === rowCount) {
+      sortedColumns[colIndex] = nextSorted;
+      sortedByKey[columnKey] = nextSorted;
+    } else {
+      sortedColumns[colIndex] = null;
+    }
+  }
+
+  numericColumnarData.sortedIndexColumns = sortedColumns;
+  numericColumnarData.sortedIndexByKey = sortedByKey;
+  return numericColumnarData;
 }
 
 function getOrBuildSortedIndexColumnForExport(
@@ -901,5 +1096,6 @@ export {
   decodeColumnarBinaryData,
   decodeColumnarBinaryPayload,
   convertNumericColumnarDataToObjectRows,
+  ensureNumericColumnarSortedIndices,
   ensureArrayBuffer,
 };
