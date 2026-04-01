@@ -179,4 +179,6 @@ Human on top providing direction, ideas, constraints, and feedback (plus the occ
 
 ## TODO
 
-- Make filtering/sorting fully pluggable for other projects (module packaging + public API + UI decoupling).
+- Extract remaining orchestration from `app.js` into core runtime/engine adapters so `app.js` is a thin UI layer.
+- Finalize filtering result ownership contract (safe owned default + explicit ephemeral mode for max-performance paths).
+- Promote selected core experimental entrypoints to stable once API contracts and cross-runtime tests are fully locked.
