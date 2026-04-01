@@ -63,6 +63,8 @@ function bindBenchmarkUi(options) {
 
     setAllActionButtonsDisabled(true, primaryBtnEl, currentBtnEl);
     try {
+      // Yield once so busy state/cursor can repaint before heavy benchmark setup.
+      await delayBenchmarkTick();
       const result = await runBenchmark({
         api,
         currentOnly: currentOnly === true,

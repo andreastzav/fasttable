@@ -342,6 +342,9 @@ function setSortRuntimeOptions(nextOptions) {
   if (useIndexSortEl && typeof options.useIndexSort === "boolean") {
     useIndexSortEl.checked = options.useIndexSort;
   }
+
+  // Keep benchmark runtime sort flags in sync without rebuilding benchmark data.
+  benchmarkSortRuntime.setSortOptions(getSortRuntimeOptions());
 }
 
 function createZeroGenerationMetrics() {
@@ -1316,8 +1319,6 @@ function runPrecomputedSortSnapshotBenchmarkPass(rowsSnapshot, descriptors) {
 }
 
 function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-  syncBenchmarkSortRuntime();
-
   const requestedSortMode =
     typeof sortMode === "string" && sortMode.trim() !== ""
       ? sortMode
