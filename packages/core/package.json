@@ -1,7 +1,7 @@
 {
   "name": "@fasttable/core",
   "description": "FastTable core ESM modules for generation, filtering, sorting, IO, runtime and benchmarks.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "license": "MIT",
   "type": "module",
   "keywords": [
