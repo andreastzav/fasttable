@@ -19,10 +19,11 @@ body.busyCursor * {
 }
 
 .appVersionBadge {
-  position: fixed;
-  top: 6px;
-  left: 8px;
-  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 56px;
   padding: 3px 7px;
   border-radius: 999px;
   border: 1px solid #d8dfec;
@@ -32,6 +33,7 @@ body.busyCursor * {
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.02em;
+  white-space: nowrap;
   pointer-events: none;
 }
 
