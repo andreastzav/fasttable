@@ -20,6 +20,7 @@ function parseArgs(argv) {
     chunkSize: 10000,
     generateWorkers: 0,
     precomputeSortWorkers: false,
+    sortMode: "",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -78,6 +79,11 @@ function parseArgs(argv) {
       args.precomputeSortWorkers = true;
       continue;
     }
+    if (token === "--sort-mode" && i + 1 < argv.length) {
+      args.sortMode = String(argv[i + 1]).trim().toLowerCase();
+      i += 1;
+      continue;
+    }
     if (token === "--help" || token === "-h") {
       args.help = true;
       continue;
@@ -103,6 +109,7 @@ function printHelp() {
   console.log("  --generate-workers <n> Generate n rows with worker_threads (skip preset load)");
   console.log("  --workers <n>          Worker count for generation/precompute (default: 4)");
   console.log("  --chunk-size <n>       Worker generation chunk size (default: 10000)");
+  console.log("  --sort-mode <name>     native | timsort | precomputed (force current sorting mode)");
   console.log("  --precompute-sort-workers");
   console.log("                         Precompute sorted index columns using worker_threads");
   console.log("  -h, --help             Show this help");
@@ -133,6 +140,323 @@ async function maybeWriteOutput(outPath, sections) {
   const content = sections.join("\n\n");
   await fs.writeFile(absolutePath, content, "utf8");
   console.log(`Saved benchmark output to: ${absolutePath}`);
+}
+
+function hasIndexCollection(indices) {
+  return Array.isArray(indices) || ArrayBuffer.isView(indices);
+}
+
+function normalizeSortDescriptors(descriptors) {
+  const source = Array.isArray(descriptors) ? descriptors : [];
+  const output = [];
+  for (let i = 0; i < source.length; i += 1) {
+    const descriptor = source[i];
+    const columnKey =
+      descriptor && typeof descriptor.columnKey === "string"
+        ? descriptor.columnKey
+        : "";
+    if (columnKey === "") {
+      continue;
+    }
+    output.push({
+      columnKey,
+      direction: descriptor.direction === "asc" ? "asc" : "desc",
+    });
+  }
+  return output;
+}
+
+function materializeIndexBuffer(indices, fallbackCount) {
+  const defaultCount = Math.max(0, Number(fallbackCount) | 0);
+  if (indices === null || indices === undefined) {
+    const out = new Uint32Array(defaultCount);
+    for (let i = 0; i < defaultCount; i += 1) {
+      out[i] = i;
+    }
+    return out;
+  }
+
+  if (hasIndexCollection(indices)) {
+    const out = new Uint32Array(indices.length);
+    for (let i = 0; i < indices.length; i += 1) {
+      out[i] = Number(indices[i]) >>> 0;
+    }
+    return out;
+  }
+
+  return new Uint32Array(0);
+}
+
+function isIdentitySelection(indices, rowCount) {
+  if (!hasIndexCollection(indices) || indices.length !== rowCount) {
+    return false;
+  }
+
+  for (let i = 0; i < indices.length; i += 1) {
+    if ((Number(indices[i]) >>> 0) !== i) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function resolvePrecomputedSortedColumn(runtime, schema, columnKey, rowCount) {
+  const numericColumnarData = runtime.getNumericColumnarForSave();
+  if (!numericColumnarData || typeof numericColumnarData !== "object") {
+    return null;
+  }
+
+  const sortedByKey =
+    numericColumnarData.sortedIndexByKey &&
+    typeof numericColumnarData.sortedIndexByKey === "object" &&
+    !Array.isArray(numericColumnarData.sortedIndexByKey)
+      ? numericColumnarData.sortedIndexByKey
+      : null;
+  if (sortedByKey && sortedByKey[columnKey] instanceof Uint32Array) {
+    const column = sortedByKey[columnKey];
+    if (column.length === rowCount) {
+      return column;
+    }
+  }
+
+  const sortedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
+    ? numericColumnarData.sortedIndexColumns
+    : null;
+  if (!sortedColumns) {
+    return null;
+  }
+
+  const columnKeys = Array.isArray(schema && schema.columnKeys)
+    ? schema.columnKeys
+    : [];
+  const columnIndex = columnKeys.indexOf(columnKey);
+  if (columnIndex < 0 || columnIndex >= sortedColumns.length) {
+    return null;
+  }
+
+  const column = sortedColumns[columnIndex];
+  if (column instanceof Uint32Array && column.length === rowCount) {
+    return column;
+  }
+
+  return null;
+}
+
+function buildPrecomputedSortedSelection(
+  selectedIndices,
+  sortedColumn,
+  direction,
+  rowCount
+) {
+  const count = selectedIndices.length;
+  if (count === 0) {
+    return {
+      sortedIndices: new Uint32Array(0),
+      dataPath: "indices+precomputed-empty",
+    };
+  }
+
+  const fullSelection = isIdentitySelection(selectedIndices, rowCount);
+  if (fullSelection) {
+    if (direction === "desc") {
+      const reversed = new Uint32Array(rowCount);
+      for (let i = 0; i < rowCount; i += 1) {
+        reversed[i] = sortedColumn[rowCount - 1 - i];
+      }
+      return {
+        sortedIndices: reversed,
+        dataPath: "indices+precomputed-full-desc",
+      };
+    }
+
+    return {
+      sortedIndices: sortedColumn,
+      dataPath: "indices+precomputed-full-asc",
+    };
+  }
+
+  const selected = new Uint8Array(rowCount);
+  for (let i = 0; i < count; i += 1) {
+    const rowIndex = Number(selectedIndices[i]) >>> 0;
+    if (rowIndex < rowCount) {
+      selected[rowIndex] = 1;
+    }
+  }
+
+  const out = new Uint32Array(count);
+  let writeIndex = 0;
+  if (direction === "desc") {
+    for (let i = sortedColumn.length - 1; i >= 0; i -= 1) {
+      const rowIndex = sortedColumn[i];
+      if (selected[rowIndex] === 1) {
+        out[writeIndex] = rowIndex;
+        writeIndex += 1;
+      }
+    }
+  } else {
+    for (let i = 0; i < sortedColumn.length; i += 1) {
+      const rowIndex = sortedColumn[i];
+      if (selected[rowIndex] === 1) {
+        out[writeIndex] = rowIndex;
+        writeIndex += 1;
+      }
+    }
+  }
+
+  if (writeIndex !== count) {
+    return null;
+  }
+
+  return {
+    sortedIndices: out,
+    dataPath: "indices+precomputed-subset-scan",
+  };
+}
+
+function runCliPrecomputedSortSnapshotPass(runtime, schema, rowsSnapshot, descriptors) {
+  const descriptorList = normalizeSortDescriptors(descriptors);
+  const fallback = () =>
+    runtime.runSortSnapshotPass(rowsSnapshot, descriptorList, "native");
+  if (descriptorList.length !== 1) {
+    return fallback();
+  }
+
+  const rowCount = runtime.getRowCount();
+  const sourceIndices =
+    Array.isArray(rowsSnapshot) && hasIndexCollection(rowsSnapshot.__rowIndices)
+      ? rowsSnapshot.__rowIndices
+      : rowsSnapshot &&
+          typeof rowsSnapshot === "object" &&
+          hasIndexCollection(rowsSnapshot.rowIndices)
+        ? rowsSnapshot.rowIndices
+        : null;
+  if (!hasIndexCollection(sourceIndices)) {
+    return fallback();
+  }
+
+  const selectedIndices = materializeIndexBuffer(sourceIndices, rowCount);
+  const descriptor = descriptorList[0];
+  const sortedColumn = resolvePrecomputedSortedColumn(
+    runtime,
+    schema,
+    descriptor.columnKey,
+    rowCount
+  );
+  if (!(sortedColumn instanceof Uint32Array)) {
+    return fallback();
+  }
+
+  const coreStartMs = performance.now();
+  const sorted = buildPrecomputedSortedSelection(
+    selectedIndices,
+    sortedColumn,
+    descriptor.direction,
+    rowCount
+  );
+  if (!sorted || !hasIndexCollection(sorted.sortedIndices)) {
+    return fallback();
+  }
+  const sortCoreMs = performance.now() - coreStartMs;
+
+  return {
+    sortMs: sortCoreMs,
+    sortCoreMs,
+    sortPrepMs: 0,
+    sortTotalMs: sortCoreMs,
+    sortMode: "precomputed",
+    sortedCount: sorted.sortedIndices.length,
+    descriptors: descriptorList,
+    dataPath: sorted.dataPath,
+    comparatorMode: "precomputed",
+  };
+}
+
+function buildCliSortModes(runtime) {
+  const baseModes =
+    runtime && typeof runtime.getSortModes === "function"
+      ? runtime.getSortModes()
+      : ["native"];
+  const modeSet = Object.create(null);
+  const modes = [];
+
+  for (let i = 0; i < baseModes.length; i += 1) {
+    const mode = typeof baseModes[i] === "string" ? baseModes[i].trim() : "";
+    if (mode === "" || modeSet[mode] === true) {
+      continue;
+    }
+    modeSet[mode] = true;
+    modes.push(mode);
+  }
+
+  if (modeSet.precomputed !== true) {
+    modeSet.precomputed = true;
+    modes.push("precomputed");
+  }
+
+  if (modes.length === 0) {
+    modes.push("native");
+  }
+
+  return modes;
+}
+
+function createCliBenchmarkApi(runtime, schema, forcedSortMode) {
+  const availableSortModes = buildCliSortModes(runtime);
+  const normalizedForcedMode =
+    typeof forcedSortMode === "string" && forcedSortMode.trim() !== ""
+      ? forcedSortMode.trim().toLowerCase()
+      : "";
+  const effectiveForcedMode =
+    normalizedForcedMode !== "" &&
+    availableSortModes.includes(normalizedForcedMode)
+      ? normalizedForcedMode
+      : "";
+
+  return {
+    hasData: () => runtime.hasData(),
+    getRowCount: () => runtime.getRowCount(),
+    getModeOptions: () => runtime.getModeOptions(),
+    setModeOptions: (nextOptions, switchOptions) =>
+      runtime.setModeOptions(nextOptions, switchOptions),
+    getRawFilters: () => runtime.getRawFilters(),
+    setRawFilters: (rawFilters) => runtime.setRawFilters(rawFilters),
+    setSingleFilter: (columnKey, value) => runtime.setSingleFilter(columnKey, value),
+    clearFilters: () => runtime.clearFilters(),
+    runFilterPass: (options) => runtime.runFilterPass(options),
+    runSingleFilterPass: (columnKey, value, options) =>
+      runtime.runSingleFilterPass(columnKey, value, options),
+    runFilterPassWithRawFilters: (rawFilters, options) =>
+      runtime.runFilterPassWithRawFilters(rawFilters, options),
+    getSortModes: () =>
+      effectiveForcedMode !== ""
+        ? [effectiveForcedMode]
+        : availableSortModes.slice(),
+    getSortMode: () =>
+      effectiveForcedMode !== "" ? effectiveForcedMode : runtime.getSortMode(),
+    getSortOptions: () => runtime.getSortOptions(),
+    setSortOptions: (nextSortOptions) => runtime.setSortOptions(nextSortOptions),
+    buildSortRowsSnapshot: (rawFilters) => runtime.buildSortRowsSnapshot(rawFilters),
+    runSortSnapshotPass: (rowsSnapshot, descriptors, sortMode) => {
+      const requestedMode =
+        typeof sortMode === "string" && sortMode.trim() !== ""
+          ? sortMode.trim().toLowerCase()
+          : effectiveForcedMode !== ""
+            ? effectiveForcedMode
+            : runtime.getSortMode();
+      if (requestedMode === "precomputed") {
+        return runCliPrecomputedSortSnapshotPass(
+          runtime,
+          schema,
+          rowsSnapshot,
+          descriptors
+        );
+      }
+
+      return runtime.runSortSnapshotPass(rowsSnapshot, descriptors, requestedMode);
+    },
+    isTimSortAvailable: () => availableSortModes.includes("timsort"),
+  };
 }
 
 async function main() {
@@ -215,13 +539,27 @@ async function main() {
     );
   }
 
+  const availableSortModes = buildCliSortModes(runtime);
+  if (
+    typeof args.sortMode === "string" &&
+    args.sortMode.trim() !== "" &&
+    !availableSortModes.includes(args.sortMode)
+  ) {
+    throw new Error(
+      `Invalid --sort-mode value: ${args.sortMode}. Available: ${availableSortModes.join(
+        ", "
+      )}.`
+    );
+  }
+  const benchmarkApi = createCliBenchmarkApi(runtime, schema, args.sortMode);
+
   const outputSections = [];
 
   if (args.bench === "filtering" || args.bench === "both") {
     console.log("");
     console.log("Running filtering benchmark...");
     const filtering = await runFilteringBenchmark({
-      api: runtime,
+      api: benchmarkApi,
       currentOnly: args.currentOnly,
       rounds: args.rounds,
       onUpdate: createLinePrinter("filter"),
@@ -242,7 +580,7 @@ async function main() {
     console.log("");
     console.log("Running sorting benchmark...");
     const sorting = await runSortBenchmark({
-      api: runtime,
+      api: benchmarkApi,
       currentOnly: args.currentOnly,
       rounds: args.rounds,
       onUpdate: createLinePrinter("sort"),

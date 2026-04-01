@@ -961,7 +961,11 @@ function getAvailableSortModes() {
 
   const modes = [];
   for (let i = 0; i < sortModeEl.options.length; i += 1) {
-    const optionValue = sortModeEl.options[i].value;
+    const option = sortModeEl.options[i];
+    if (option.disabled) {
+      continue;
+    }
+    const optionValue = option.value;
     if (optionValue) {
       modes.push(optionValue);
     }
@@ -1222,9 +1226,9 @@ function syncBenchmarkSortRuntime(rawFilters) {
   benchmarkSortRuntime.setSortOptions(getSortRuntimeOptions());
 
   const selectedSortMode = getSortMode();
-  const runtimeSelectedSortMode =
-    selectedSortMode === "precomputed" ? "native" : selectedSortMode;
-  benchmarkSortRuntime.setSortMode(runtimeSelectedSortMode);
+  if (selectedSortMode !== "precomputed") {
+    benchmarkSortRuntime.setSortMode(selectedSortMode);
+  }
   return runtimeRawFilters;
 }
 
@@ -1233,20 +1237,98 @@ function buildRowsSnapshotFromRawFilters(rawFilters) {
   return benchmarkSortRuntime.buildSortRowsSnapshot(runtimeRawFilters);
 }
 
+function resolveBenchmarkSnapshotIndices(rowsSnapshot, totalRowCount) {
+  if (Array.isArray(rowsSnapshot) && hasIndexCollection(rowsSnapshot.__rowIndices)) {
+    return materializeFilteredIndexArray(rowsSnapshot.__rowIndices, totalRowCount);
+  }
+
+  if (
+    rowsSnapshot &&
+    typeof rowsSnapshot === "object" &&
+    hasIndexCollection(rowsSnapshot.rowIndices)
+  ) {
+    return materializeFilteredIndexArray(rowsSnapshot.rowIndices, totalRowCount);
+  }
+
+  return null;
+}
+
+function runPrecomputedSortSnapshotBenchmarkPass(rowsSnapshot, descriptors) {
+  const descriptorList = normalizeSortDescriptorList(descriptors);
+  if (!Array.isArray(descriptorList) || descriptorList.length === 0) {
+    return benchmarkSortRuntime.runSortSnapshotPass(
+      rowsSnapshot,
+      descriptorList,
+      "native"
+    );
+  }
+
+  const loadedRowCount = getLoadedRowCount();
+  const snapshotIndices = resolveBenchmarkSnapshotIndices(
+    rowsSnapshot,
+    loadedRowCount
+  );
+  if (!hasIndexCollection(snapshotIndices)) {
+    return benchmarkSortRuntime.runSortSnapshotPass(
+      rowsSnapshot,
+      descriptorList,
+      "native"
+    );
+  }
+
+  const snapshotCount = snapshotIndices.length;
+  const totalStartMs = performance.now();
+  const sortedRun = buildSortedIndicesViaPrecomputedMode(
+    snapshotIndices,
+    snapshotCount,
+    descriptorList,
+    loadedRowCount
+  );
+  if (
+    !sortedRun ||
+    !sortedRun.sortResult ||
+    !hasIndexCollection(sortedRun.sortedIndices)
+  ) {
+    return benchmarkSortRuntime.runSortSnapshotPass(
+      rowsSnapshot,
+      descriptorList,
+      "native"
+    );
+  }
+
+  const sortTotalMs = performance.now() - totalStartMs;
+  const sortCoreMs = Number(sortedRun.sortResult.durationMs) || 0;
+  return {
+    sortMs: sortCoreMs,
+    sortCoreMs,
+    sortPrepMs: sortTotalMs - sortCoreMs,
+    sortTotalMs,
+    sortMode: "precomputed",
+    sortedCount: sortedRun.sortedIndices.length,
+    descriptors:
+      sortedRun.sortResult.effectiveDescriptors ||
+      sortedRun.sortResult.descriptors ||
+      descriptorList,
+    dataPath: sortedRun.sortResult.dataPath,
+    comparatorMode: sortedRun.sortResult.comparatorMode || "precomputed",
+  };
+}
+
 function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
   syncBenchmarkSortRuntime();
 
-  const runtimeSortMode =
+  const requestedSortMode =
     typeof sortMode === "string" && sortMode.trim() !== ""
-      ? sortMode === "precomputed"
-        ? "native"
-        : sortMode
+      ? sortMode
       : undefined;
+  if (requestedSortMode === "precomputed") {
+    return runPrecomputedSortSnapshotBenchmarkPass(rowsSnapshot, descriptors);
+  }
 
   return benchmarkSortRuntime.runSortSnapshotPass(
     rowsSnapshot,
     descriptors,
-    runtimeSortMode
+    requestedSortMode
   );
 }
 
@@ -2708,10 +2790,10 @@ function getFilteredIndexAt(filteredIndices, rowOffset) {
 
 function materializeFilteredIndexArray(filteredIndices, fallbackCount) {
   const count = getFilteredIndicesCount(filteredIndices, fallbackCount);
-  const out = new Array(count);
+  const out = new Uint32Array(count);
 
   for (let i = 0; i < count; i += 1) {
-    out[i] = getFilteredIndexAt(filteredIndices, i);
+    out[i] = Number(getFilteredIndexAt(filteredIndices, i)) >>> 0;
   }
 
   return out;

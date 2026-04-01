@@ -101,6 +101,12 @@ Use the runtime CLI script:
 node bench-runtime-cli.mjs --preset 1000000 --bench filtering --current --rounds 3
 ```
 
+Force sorting benchmark mode (native, timsort, or precomputed):
+
+```bash
+node bench-runtime-cli.mjs --preset 1000000 --bench sorting --current --sort-mode precomputed --rounds 3
+```
+
 Optional text output:
 
 ```bash

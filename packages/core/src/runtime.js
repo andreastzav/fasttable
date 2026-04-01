@@ -85,9 +85,11 @@ function normalizeSortDescriptorList(descriptors) {
 }
 
 function materializeFilteredIndices(filteredIndices, fallbackCount) {
+  const defaultCount = Math.max(0, Number(fallbackCount) | 0);
+
   if (filteredIndices === null || filteredIndices === undefined) {
-    const out = new Array(fallbackCount);
-    for (let i = 0; i < fallbackCount; i += 1) {
+    const out = new Uint32Array(defaultCount);
+    for (let i = 0; i < defaultCount; i += 1) {
       out[i] = i;
     }
     return out;
@@ -102,22 +104,26 @@ function materializeFilteredIndices(filteredIndices, fallbackCount) {
       0,
       Math.min(filteredIndices.count | 0, filteredIndices.buffer.length)
     );
-    const out = new Array(count);
+    const out = new Uint32Array(count);
     for (let i = 0; i < count; i += 1) {
-      out[i] = filteredIndices.buffer[i];
+      out[i] = filteredIndices.buffer[i] >>> 0;
     }
     return out;
   }
 
   if (Array.isArray(filteredIndices) || ArrayBuffer.isView(filteredIndices)) {
-    const out = new Array(filteredIndices.length);
+    const out = new Uint32Array(filteredIndices.length);
     for (let i = 0; i < filteredIndices.length; i += 1) {
-      out[i] = filteredIndices[i];
+      out[i] = Number(filteredIndices[i]) >>> 0;
     }
     return out;
   }
 
-  return [];
+  return new Uint32Array(0);
+}
+
+function hasIndexCollection(indices) {
+  return Array.isArray(indices) || ArrayBuffer.isView(indices);
 }
 
 function buildPrecomputedSortKeyColumns(
@@ -472,9 +478,9 @@ function createFastTableRuntime(options) {
       source && typeof source === "object" && !Array.isArray(source)
         ? source
         : null;
-    const directCandidate = Array.isArray(rows.__rowIndices)
+    const directCandidate = hasIndexCollection(rows.__rowIndices)
       ? rows.__rowIndices
-      : container && Array.isArray(container.rowIndices)
+      : container && hasIndexCollection(container.rowIndices)
         ? container.rowIndices
         : null;
     if (isValidRowIndexCollection(directCandidate, rowCount, totalRows)) {
@@ -899,12 +905,14 @@ function createFastTableRuntime(options) {
     );
     const snapshotRows = new Array(indices.length);
 
-    for (let i = 0; i < indices.length; i += 1) {
-      snapshotRows[i] = rows[indices[i]];
-    }
-
     Object.defineProperty(snapshotRows, "__rowIndices", {
       value: indices,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(snapshotRows, "__rowsMaterialized", {
+      value: false,
       enumerable: false,
       configurable: true,
       writable: true,
@@ -920,7 +928,6 @@ function createFastTableRuntime(options) {
 
   function runSortSnapshotPass(rowsSnapshot, descriptors, sortModeOverride) {
     const sourceRows = resolveSnapshotRows(rowsSnapshot);
-    const rowsToSort = sourceRows.slice();
     const descriptorList = normalizeSortDescriptorList(descriptors);
     const controller = createSortController({
       columnKeys: COLUMN_KEYS,
@@ -948,18 +955,38 @@ function createFastTableRuntime(options) {
       sourceRows,
       allRows.length
     );
+    const snapshotCount = Array.isArray(sourceRows)
+      ? sourceRows.length
+      : hasIndexCollection(snapshotRowIndices)
+        ? snapshotRowIndices.length
+        : 0;
     const sortTotalStartMs = now();
+    let rowsToSort = null;
     let result = null;
     if (sortOptions.useIndexSort) {
       const activeDescriptors = controller.getSortDescriptors();
       const canUseGlobalRowIndices =
-        Array.isArray(snapshotRowIndices) &&
-        snapshotRowIndices.length === rowsToSort.length &&
+        hasIndexCollection(snapshotRowIndices) &&
+        snapshotRowIndices.length === snapshotCount &&
         allRows.length > 0;
       const indices = canUseGlobalRowIndices
         ? snapshotRowIndices.slice()
-        : new Array(rowsToSort.length);
+        : new Array(snapshotCount);
       if (!canUseGlobalRowIndices) {
+        if (
+          Array.isArray(sourceRows) &&
+          sourceRows.__rowsMaterialized === false &&
+          hasIndexCollection(snapshotRowIndices) &&
+          snapshotRowIndices.length === snapshotCount
+        ) {
+          rowsToSort = new Array(snapshotCount);
+          for (let i = 0; i < snapshotCount; i += 1) {
+            rowsToSort[i] = allRows[snapshotRowIndices[i]];
+          }
+        } else {
+          rowsToSort = sourceRows.slice();
+        }
+
         for (let i = 0; i < indices.length; i += 1) {
           indices[i] = i;
         }
@@ -994,11 +1021,32 @@ function createFastTableRuntime(options) {
         runSortOptions
       );
     } else {
+      if (
+        Array.isArray(sourceRows) &&
+        sourceRows.__rowsMaterialized === false &&
+        hasIndexCollection(snapshotRowIndices) &&
+        snapshotRowIndices.length === snapshotCount
+      ) {
+        rowsToSort = new Array(snapshotCount);
+        for (let i = 0; i < snapshotCount; i += 1) {
+          rowsToSort[i] = allRows[snapshotRowIndices[i]];
+        }
+      } else {
+        rowsToSort = sourceRows.slice();
+      }
+
       result = controller.sortRows(rowsToSort, effectiveSortMode, sortOptions);
     }
     const sortTotalMs = now() - sortTotalStartMs;
     const sortCoreMs = Number(result.durationMs);
     const sortPrepMs = sortTotalMs - sortCoreMs;
+    const sortedCount = sortOptions.useIndexSort
+      ? hasIndexCollection(snapshotRowIndices)
+        ? snapshotRowIndices.length
+        : snapshotCount
+      : rowsToSort && typeof rowsToSort.length === "number"
+        ? rowsToSort.length
+        : snapshotCount;
 
     return {
       sortMs: sortCoreMs,
@@ -1006,7 +1054,7 @@ function createFastTableRuntime(options) {
       sortPrepMs,
       sortTotalMs,
       sortMode: result.sortMode,
-      sortedCount: rowsToSort.length,
+      sortedCount,
       descriptors: result.effectiveDescriptors,
       dataPath: result.dataPath,
       comparatorMode: result.comparatorMode,

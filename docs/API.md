@@ -334,3 +334,4 @@ const precomputed =
 Existing CLI script in this repo:
 
 - `node bench-runtime-cli.mjs --preset 1000000 --bench filtering --current --rounds 3`
+- `node bench-runtime-cli.mjs --preset 1000000 --bench sorting --current --sort-mode precomputed --rounds 3`

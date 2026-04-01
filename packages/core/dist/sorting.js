@@ -466,7 +466,7 @@
   }
 
   function sortRowsNative(rows, compareFn) {
-    if (!Array.isArray(rows) || rows.length <= 1 || typeof compareFn !== "function") {
+    if (!hasSortableCollection(rows) || typeof compareFn !== "function") {
       return;
     }
 
@@ -475,7 +475,7 @@
 
   function createUnavailableSortMethod(label) {
     const method = function sortRowsUnavailable(rows, compareFn) {
-      if (!Array.isArray(rows) || rows.length <= 1 || typeof compareFn !== "function") {
+      if (!hasSortableCollection(rows) || typeof compareFn !== "function") {
         return;
       }
 
@@ -736,7 +736,29 @@
       sortIndices(indices, rowsByIndex, mode, sortOptions) {
         const startMs = performance.now();
         const plan = getSortPlan(mode, sortOptions);
+        if (!hasSortableCollection(indices)) {
+          return {
+            changedOrder: false,
+            durationMs: performance.now() - startMs,
+            sortMode: plan.sortMode,
+            comparatorMode: plan.comparatorOptions.useTypedComparator
+              ? "typed"
+              : "generic",
+            dataPath: "indices",
+            descriptors: cloneDescriptors(plan.descriptors),
+            effectiveDescriptors: cloneDescriptors(plan.effectiveDescriptors),
+            restoredDefault: plan.restoredDefault,
+          };
+        }
+
         const sortMethod = getSortMethod(plan.sortMode);
+        const useArraySortTarget =
+          ArrayBuffer.isView(indices) &&
+          !Array.isArray(indices) &&
+          plan.sortMode !== DEFAULT_SORT_MODE;
+        const sortTarget = useArraySortTarget
+          ? Array.from(indices)
+          : indices;
         const rowCount =
           rowsByIndex && typeof rowsByIndex.length === "number"
             ? rowsByIndex.length
@@ -757,7 +779,7 @@
         const canUsePrecomputedKeys = hasValidPrecomputedIndexKeys(
           precomputedIndexKeys,
           plan.effectiveDescriptors.length,
-          indices.length
+          sortTarget.length
         );
 
         if (canUsePrecomputedRanks) {
@@ -765,9 +787,9 @@
             plan.effectiveDescriptors,
             precomputedRankColumns
           );
-          sortMethod(indices, compareFn);
+          sortMethod(sortTarget, compareFn);
         } else if (canUsePrecomputedKeys) {
-          const order = new Array(indices.length);
+          const order = new Array(sortTarget.length);
           for (let i = 0; i < order.length; i += 1) {
             order[i] = i;
           }
@@ -779,13 +801,13 @@
           );
           sortMethod(order, compareFn);
 
-          const sortedIndices = new Array(indices.length);
+          const sortedIndices = new Array(sortTarget.length);
           for (let i = 0; i < order.length; i += 1) {
-            sortedIndices[i] = indices[order[i]];
+            sortedIndices[i] = sortTarget[order[i]];
           }
 
           for (let i = 0; i < sortedIndices.length; i += 1) {
-            indices[i] = sortedIndices[i];
+            sortTarget[i] = sortedIndices[i];
           }
         } else {
           const compareFn = createCompositeIndexComparator(
@@ -793,7 +815,13 @@
             plan.comparatorOptions,
             rowsByIndex
           );
-          sortMethod(indices, compareFn);
+          sortMethod(sortTarget, compareFn);
+        }
+
+        if (sortTarget !== indices) {
+          for (let i = 0; i < sortTarget.length; i += 1) {
+            indices[i] = sortTarget[i];
+          }
         }
 
         return {

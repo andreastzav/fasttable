@@ -431,6 +431,18 @@ function formatSortOptionFlags(options) {
   }`;
 }
 
+function sortModeUsesComparatorFlags(sortMode) {
+  return sortMode === "native" || sortMode === "timsort";
+}
+
+function formatSortOptionFlagsForMode(sortMode, options) {
+  if (!sortModeUsesComparatorFlags(sortMode)) {
+    return "typed:n/a, index:n/a";
+  }
+
+  return formatSortOptionFlags(options);
+}
+
 function buildSortModeVariants(sortMode, baseSortOptions) {
   const normalizedBase = normalizeSortOptionFlags(baseSortOptions);
   if (sortMode !== "timsort" && sortMode !== "native") {
@@ -438,7 +450,10 @@ function buildSortModeVariants(sortMode, baseSortOptions) {
       {
         mode: sortMode,
         options: normalizedBase,
-        label: `mode:${sortMode}, ${formatSortOptionFlags(normalizedBase)}`,
+        label: `mode:${sortMode}, ${formatSortOptionFlagsForMode(
+          sortMode,
+          normalizedBase
+        )}`,
       },
     ];
   }
@@ -476,7 +491,7 @@ function buildSortVariantsForRun(api, currentOnly, baseSortOptions) {
       {
         mode,
         options,
-        label: `mode:${mode}, ${formatSortOptionFlags(options)}`,
+        label: `mode:${mode}, ${formatSortOptionFlagsForMode(mode, options)}`,
       },
     ];
   }
@@ -597,7 +612,7 @@ async function runSortBenchmark(options) {
     ) {
       const variant = sortModeVariants[modeIndex];
       const sortMode = variant.mode;
-      if (typeof api.setSortOptions === "function") {
+      if (sortModeUsesComparatorFlags(sortMode) && typeof api.setSortOptions === "function") {
         api.setSortOptions(variant.options);
         await delayTick();
       }
