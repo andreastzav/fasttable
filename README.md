@@ -93,6 +93,19 @@ Run:
 node build-core.mjs
 ```
 
+### App version badge + auto bump on commit
+
+- `version.json` is the app version source shown in the top-left UI badge.
+- `packages/core/package.json` version is kept in sync.
+- `scripts/bump-version.mjs` bumps patch version (`x.y.z -> x.y.(z+1)`).
+- `.githooks/pre-commit` runs the bump script automatically for every commit.
+
+Enable repo hooks once on your machine:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ### Quick Node CLI benchmark
 
 Use the runtime CLI script:

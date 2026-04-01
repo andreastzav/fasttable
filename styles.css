@@ -18,6 +18,23 @@ body.busyCursor * {
   cursor: wait !important;
 }
 
+.appVersionBadge {
+  position: fixed;
+  top: 6px;
+  left: 8px;
+  z-index: 1000;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid #d8dfec;
+  background: rgba(255, 255, 255, 0.96);
+  color: #2e3a52;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
 .layout {
   width: 100%;
   max-width: 100vw;

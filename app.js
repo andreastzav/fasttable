@@ -83,6 +83,7 @@ const benchmarkStatusToggleBtnEl = document.getElementById(
 const previewHeadEl = document.getElementById("previewHead");
 const previewBodyEl = document.getElementById("previewBody");
 const previewTableWrapEl = document.querySelector(".tableWrap");
+const appVersionBadgeEl = document.getElementById("appVersionBadge");
 
 const objectRowFilterController = createRowFilterController([]);
 const objectColumnarFilterController = createColumnarFilterController(null);
@@ -216,6 +217,33 @@ function formatMsFixed3(value) {
 
 function formatPercent(value) {
   return Number(value).toFixed(2);
+}
+
+async function loadAndRenderAppVersion() {
+  if (!appVersionBadgeEl) {
+    return;
+  }
+
+  try {
+    const cacheBuster = Date.now();
+    const response = await fetch(`./version.json?v=${cacheBuster}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const version =
+      payload && typeof payload.version === "string" ? payload.version.trim() : "";
+    if (!version) {
+      throw new Error("Missing version field");
+    }
+
+    appVersionBadgeEl.textContent = `v${version}`;
+  } catch (error) {
+    appVersionBadgeEl.textContent = "vunknown";
+  }
 }
 
 function formatKbFromBytes(bytes) {
@@ -6060,6 +6088,7 @@ syncWorkerGenerationControls();
 syncSortModeAvailability();
 initializeTelemetryPanelControls();
 syncClearFilterCacheButtonState();
+void loadAndRenderAppVersion();
 
 if (sortModeEl) {
   sortModeEl.addEventListener("change", () => {
