@@ -10,7 +10,9 @@ Main source files in `packages/core/src`:
 - `benchmark.js`: filtering and sorting benchmark engines.
 - `generation.js`: data generation + object/numeric/columnar derivations.
 - `filtering.js`: filtering controllers and dictionary/planner paths.
+- `filtering-orchestration.js`: shared filtering orchestration/cache layer for browser and CLI adapters.
 - `sorting.js`: sort controllers, typed comparators, index sorting.
+- `sorting-orchestration.js`: shared sort benchmark orchestration layer for browser and CLI adapters.
 - `io.js`: binary codec and format conversion utilities.
 - `io-browser.js`, `io-node.js`: browser/node I/O adapters.
 - `generation-worker-protocol.js`: shared worker message protocol.
@@ -42,7 +44,9 @@ Build output:
   - `@fasttable/core/io-browser`
   - `@fasttable/core/generation`
   - `@fasttable/core/filtering`
+  - `@fasttable/core/filtering-orchestration`
   - `@fasttable/core/sorting`
+  - `@fasttable/core/sorting-orchestration`
 - `experimental`:
   - `@fasttable/core/engine`
   - `@fasttable/core/generation-worker-protocol`
@@ -72,7 +76,9 @@ Build output:
 - `@fasttable/core`
 - `@fasttable/core/generation`
 - `@fasttable/core/filtering`
+- `@fasttable/core/filtering-orchestration`
 - `@fasttable/core/sorting`
+- `@fasttable/core/sorting-orchestration`
 - `@fasttable/core/io`
 - `@fasttable/core/io-adapter`
 - `@fasttable/core/io-browser`

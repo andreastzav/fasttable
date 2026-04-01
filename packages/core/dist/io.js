@@ -402,6 +402,121 @@ function buildSortedIndexColumnFromDictionaryIds(ids, dictionary, columnKey, row
   );
 }
 
+function nowMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+
+  return Date.now();
+}
+
+function isSupportedRankArray(rankByRowId, expectedLength) {
+  if (!(rankByRowId instanceof Uint16Array || rankByRowId instanceof Uint32Array)) {
+    return false;
+  }
+
+  if (!Number.isFinite(expectedLength)) {
+    return true;
+  }
+
+  return rankByRowId.length === Math.max(0, Number(expectedLength) | 0);
+}
+
+function buildRankArrayForColumnFromSortedIndices(
+  numericColumnarData,
+  columnIndex,
+  sortedIndices,
+  rowCount
+) {
+  if (
+    !numericColumnarData ||
+    typeof numericColumnarData !== "object" ||
+    !(sortedIndices instanceof Uint32Array) ||
+    sortedIndices.length !== rowCount
+  ) {
+    return null;
+  }
+
+  const columnKinds = Array.isArray(numericColumnarData.columnKinds)
+    ? numericColumnarData.columnKinds
+    : [];
+  const columns = Array.isArray(numericColumnarData.columns)
+    ? numericColumnarData.columns
+    : [];
+  const columnKind = columnKinds[columnIndex];
+  const values = columns[columnIndex];
+  const rank32 = new Uint32Array(rowCount);
+  if (rowCount <= 0) {
+    return {
+      rankByRowId: rank32,
+      maxRank: 0,
+    };
+  }
+
+  const firstRowIndex = sortedIndices[0];
+  let previousToken = values ? values[firstRowIndex] : undefined;
+  let currentRank = 0;
+  rank32[firstRowIndex] = currentRank;
+
+  for (let i = 1; i < rowCount; i += 1) {
+    const rowIndex = sortedIndices[i];
+    const nextToken = values ? values[rowIndex] : undefined;
+    let isSame = false;
+
+    if (columnKind === "float") {
+      const previousNumber = Number(previousToken);
+      const nextNumber = Number(nextToken);
+      isSame =
+        (Number.isNaN(previousNumber) && Number.isNaN(nextNumber)) ||
+        previousNumber === nextNumber;
+    } else {
+      isSame = nextToken === previousToken;
+    }
+
+    if (!isSame) {
+      currentRank += 1;
+      previousToken = nextToken;
+    }
+
+    rank32[rowIndex] = currentRank;
+  }
+
+  if (currentRank <= 0xffff) {
+    const rank16 = new Uint16Array(rowCount);
+    rank16.set(rank32);
+    return {
+      rankByRowId: rank16,
+      maxRank: currentRank >>> 0,
+    };
+  }
+
+  return {
+    rankByRowId: rank32,
+    maxRank: currentRank >>> 0,
+  };
+}
+
+function buildDescendingRankArrayFromAscending(rankByRowId, maxRank, rowCount) {
+  if (!isSupportedRankArray(rankByRowId, rowCount)) {
+    return null;
+  }
+
+  const maxRankValue = Number(maxRank) >>> 0;
+  if (maxRankValue <= 0xffff) {
+    const out16 = new Uint16Array(rowCount);
+    for (let i = 0; i < rowCount; i += 1) {
+      out16[i] = (maxRankValue - (rankByRowId[i] >>> 0)) >>> 0;
+    }
+    return out16;
+  }
+
+  const out32 = new Uint32Array(rowCount);
+  for (let i = 0; i < rowCount; i += 1) {
+    out32[i] = (maxRankValue - (rankByRowId[i] >>> 0)) >>> 0;
+  }
+  return out32;
+}
+
 function ensureNumericColumnarSortedIndices(numericColumnarData, schema) {
   if (!numericColumnarData || typeof numericColumnarData !== "object") {
     return numericColumnarData;
@@ -490,6 +605,158 @@ function ensureNumericColumnarSortedIndices(numericColumnarData, schema) {
   numericColumnarData.sortedIndexColumns = sortedColumns;
   numericColumnarData.sortedIndexByKey = sortedByKey;
   return numericColumnarData;
+}
+
+function ensureNumericColumnarSortedRanks(numericColumnarData, schema) {
+  if (!numericColumnarData || typeof numericColumnarData !== "object") {
+    return {
+      numericColumnarData,
+      durationMs: 0,
+      computedColumns: 0,
+    };
+  }
+
+  const rowCount = Math.max(0, Number(numericColumnarData.rowCount) | 0);
+  const sortedColumnarData = ensureNumericColumnarSortedIndices(
+    numericColumnarData,
+    schema
+  );
+  const sortedColumns = Array.isArray(sortedColumnarData.sortedIndexColumns)
+    ? sortedColumnarData.sortedIndexColumns
+    : [];
+  const schemaColumnKeys = Array.isArray(schema && schema.columnKeys)
+    ? schema.columnKeys
+    : [];
+  const schemaBaseCount =
+    schema && Number.isInteger(schema.baseColumnCount)
+      ? Math.max(0, schema.baseColumnCount | 0)
+      : schemaColumnKeys.length;
+  const baseCount = Math.min(
+    sortedColumns.length,
+    schemaBaseCount > 0 ? schemaBaseCount : schemaColumnKeys.length
+  );
+  const existingAscRankColumns = Array.isArray(sortedColumnarData.sortedRankAscColumns)
+    ? sortedColumnarData.sortedRankAscColumns
+    : Array.isArray(sortedColumnarData.sortedRankColumns)
+      ? sortedColumnarData.sortedRankColumns
+      : [];
+  const existingAscRankMaxColumns = Array.isArray(
+    sortedColumnarData.sortedRankAscMaxColumns
+  )
+    ? sortedColumnarData.sortedRankAscMaxColumns
+    : Array.isArray(sortedColumnarData.sortedRankMaxColumns)
+      ? sortedColumnarData.sortedRankMaxColumns
+      : [];
+  const existingDescRankColumns = Array.isArray(
+    sortedColumnarData.sortedRankDescColumns
+  )
+    ? sortedColumnarData.sortedRankDescColumns
+    : [];
+  const existingDescRankMaxColumns = Array.isArray(
+    sortedColumnarData.sortedRankDescMaxColumns
+  )
+    ? sortedColumnarData.sortedRankDescMaxColumns
+    : [];
+  const ascRankColumns = new Array(baseCount).fill(null);
+  const ascRankMaxColumns = new Array(baseCount).fill(0);
+  const ascRankByKey = createEmptyLowerDictionaryPostings();
+  const ascRankMaxByKey = createEmptyLowerDictionaryPostings();
+  const descRankColumns = new Array(baseCount).fill(null);
+  const descRankMaxColumns = new Array(baseCount).fill(0);
+  const descRankByKey = createEmptyLowerDictionaryPostings();
+  const descRankMaxByKey = createEmptyLowerDictionaryPostings();
+  const startMs = nowMs();
+  let computedColumns = 0;
+
+  for (let colIndex = 0; colIndex < baseCount; colIndex += 1) {
+    const sortedIndices = sortedColumns[colIndex];
+    if (!(sortedIndices instanceof Uint32Array) || sortedIndices.length !== rowCount) {
+      continue;
+    }
+
+    const existingAscRank = existingAscRankColumns[colIndex];
+    const existingAscMax = Number(existingAscRankMaxColumns[colIndex]);
+    let ascRankByRowId = null;
+    let ascMaxRank = 0;
+    if (isSupportedRankArray(existingAscRank, rowCount)) {
+      ascRankByRowId = existingAscRank;
+      ascMaxRank = Number.isFinite(existingAscMax)
+        ? Math.max(0, existingAscMax) >>> 0
+        : rowCount > 0
+          ? existingAscRank[sortedIndices[rowCount - 1]] >>> 0
+          : 0;
+    } else {
+      const builtRank = buildRankArrayForColumnFromSortedIndices(
+        sortedColumnarData,
+        colIndex,
+        sortedIndices,
+        rowCount
+      );
+      if (!builtRank || !isSupportedRankArray(builtRank.rankByRowId, rowCount)) {
+        continue;
+      }
+
+      ascRankByRowId = builtRank.rankByRowId;
+      ascMaxRank = Number(builtRank.maxRank) >>> 0;
+      computedColumns += 1;
+    }
+
+    ascRankColumns[colIndex] = ascRankByRowId;
+    ascRankMaxColumns[colIndex] = ascMaxRank;
+
+    const existingDescRank = existingDescRankColumns[colIndex];
+    const existingDescMax = Number(existingDescRankMaxColumns[colIndex]);
+    let descRankByRowId = null;
+    if (isSupportedRankArray(existingDescRank, rowCount)) {
+      descRankByRowId = existingDescRank;
+      descRankMaxColumns[colIndex] = Number.isFinite(existingDescMax)
+        ? Math.max(0, existingDescMax) >>> 0
+        : ascMaxRank;
+    } else {
+      const builtDescRank = buildDescendingRankArrayFromAscending(
+        ascRankByRowId,
+        ascMaxRank,
+        rowCount
+      );
+      if (!isSupportedRankArray(builtDescRank, rowCount)) {
+        continue;
+      }
+      descRankByRowId = builtDescRank;
+      descRankMaxColumns[colIndex] = ascMaxRank;
+      computedColumns += 1;
+    }
+    descRankColumns[colIndex] = descRankByRowId;
+
+    const columnKey =
+      typeof schemaColumnKeys[colIndex] === "string" &&
+      schemaColumnKeys[colIndex] !== ""
+        ? schemaColumnKeys[colIndex]
+        : `column${colIndex + 1}`;
+    ascRankByKey[columnKey] = ascRankByRowId;
+    ascRankMaxByKey[columnKey] = ascMaxRank;
+    descRankByKey[columnKey] = descRankByRowId;
+    descRankMaxByKey[columnKey] = descRankMaxColumns[colIndex];
+  }
+
+  sortedColumnarData.sortedRankAscColumns = ascRankColumns;
+  sortedColumnarData.sortedRankAscByKey = ascRankByKey;
+  sortedColumnarData.sortedRankAscMaxColumns = ascRankMaxColumns;
+  sortedColumnarData.sortedRankAscMaxByKey = ascRankMaxByKey;
+  sortedColumnarData.sortedRankDescColumns = descRankColumns;
+  sortedColumnarData.sortedRankDescByKey = descRankByKey;
+  sortedColumnarData.sortedRankDescMaxColumns = descRankMaxColumns;
+  sortedColumnarData.sortedRankDescMaxByKey = descRankMaxByKey;
+  // Back-compat aliases: default rank = ascending.
+  sortedColumnarData.sortedRankColumns = ascRankColumns;
+  sortedColumnarData.sortedRankByKey = ascRankByKey;
+  sortedColumnarData.sortedRankMaxColumns = ascRankMaxColumns;
+  sortedColumnarData.sortedRankMaxByKey = ascRankMaxByKey;
+
+  return {
+    numericColumnarData: sortedColumnarData,
+    durationMs: nowMs() - startMs,
+    computedColumns,
+  };
 }
 
 function getOrBuildSortedIndexColumnForExport(
@@ -1093,5 +1360,6 @@ export {
   decodeColumnarBinaryPayload,
   convertNumericColumnarDataToObjectRows,
   ensureNumericColumnarSortedIndices,
+  ensureNumericColumnarSortedRanks,
   ensureArrayBuffer,
 };

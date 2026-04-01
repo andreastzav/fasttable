@@ -16,6 +16,7 @@ import { bindBenchmarkUi } from "./benchmark-ui.js";
     primaryBtnEl: sortBenchmarkBtnEl,
     currentBtnEl: sortBenchmarkCurrentBtnEl,
     statusEl: benchmarkStatusEl,
+    linePrefix: "sort",
     emptyMessage: "Sort benchmark API not available.",
     runBenchmark({ api, currentOnly, delayTick, now, onUpdate }) {
       return runSortBenchmark({

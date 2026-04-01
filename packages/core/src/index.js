@@ -3,6 +3,8 @@ export * from "./generation-worker-protocol.js";
 export * from "./engine.js";
 export * from "./runtime.js";
 export * from "./filtering.js";
+export * from "./filtering-orchestration.js";
 export * from "./sorting.js";
+export * from "./sorting-orchestration.js";
 export * from "./io.js";
 export * from "./benchmark.js";

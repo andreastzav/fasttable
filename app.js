@@ -1,6 +1,11 @@
 import { createFastTableEngine } from "@fasttable/core/engine";
 import { createFastTableRuntime } from "@fasttable/core/runtime";
-import { ensureNumericColumnarSortedIndices as ensureCoreNumericColumnarSortedIndices } from "@fasttable/core/io";
+import { createFilteringOrchestrator } from "@fasttable/core/filtering-orchestration";
+import { createSortBenchmarkOrchestrator } from "@fasttable/core/sorting-orchestration";
+import {
+  ensureNumericColumnarSortedIndices as ensureCoreNumericColumnarSortedIndices,
+  ensureNumericColumnarSortedRanks as ensureCoreNumericColumnarSortedRanks,
+} from "@fasttable/core/io";
 
 const {
   COLUMN_NAMES: columnNames,
@@ -140,20 +145,21 @@ const TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS = 500000;
 const TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY = 100;
 const TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY = 50;
 const objectCacheKeys = columnKeys.map((key) => `${key}Cache`);
-let topLevelFilterCacheRevision = 0;
-const topLevelFilterCaches = {
-  small: {
-    capacity: TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY,
-    entries: new Map(),
-    totalBytes: 0,
-  },
-  medium: {
-    capacity: TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY,
-    entries: new Map(),
-    totalBytes: 0,
-  },
-};
-const topLevelSmartFilterStates = new Map();
+const filteringOrchestrator = createFilteringOrchestrator({
+  now: () => performance.now(),
+  getLoadedRowCount,
+  getCurrentFilterModeKey,
+  buildDictionaryKeySearchPlan,
+  buildFilterResultFromCachedEntry,
+  syncActiveControllerIndices,
+  applyFilterPath,
+  onCacheStateChange: syncClearFilterCacheButtonState,
+  topLevelFilterCacheMinInsertMs: TOP_LEVEL_FILTER_CACHE_MIN_INSERT_MS,
+  topLevelFilterCacheSmallMaxResults: TOP_LEVEL_FILTER_CACHE_SMALL_MAX_RESULTS,
+  topLevelFilterCacheMediumMaxResults: TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS,
+  topLevelFilterCacheSmallCapacity: TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY,
+  topLevelFilterCacheMediumCapacity: TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY,
+});
 const virtualPreviewRenderer =
   tableRenderingApi &&
   typeof tableRenderingApi.createVirtualTableRenderer === "function" &&
@@ -196,6 +202,24 @@ const precomputedSubsetSortCache = {
 };
 const PRECOMPUTED_ORDER_CHECK_MAX_GROUP_SIZE = 16384;
 const benchmarkSortRuntime = createFastTableRuntime();
+const sortBenchmarkOrchestrator = createSortBenchmarkOrchestrator({
+  now: () => performance.now(),
+  materializeIndices: materializeFilteredIndexArray,
+  runFallbackSort: (rowsSnapshot, descriptorList) =>
+    benchmarkSortRuntime.runSortSnapshotPass(rowsSnapshot, descriptorList, "native"),
+  runPrecomputedSort: ({
+    descriptorList,
+    snapshotIndices,
+    snapshotCount,
+    rowCount,
+  }) =>
+    buildSortedIndicesViaPrecomputedMode(
+      snapshotIndices,
+      snapshotCount,
+      descriptorList,
+      rowCount
+    ),
+});
 
 function formatMs(value) {
   const numeric = Number(value);
@@ -606,10 +630,7 @@ function syncWorkerGenerationControls() {
 }
 
 function hasTopLevelFilterCacheEntries() {
-  return (
-    topLevelFilterCaches.small.entries.size > 0 ||
-    topLevelFilterCaches.medium.entries.size > 0
-  );
+  return filteringOrchestrator.hasTopLevelFilterCacheEntries();
 }
 
 function syncClearFilterCacheButtonState() {
@@ -622,21 +643,15 @@ function syncClearFilterCacheButtonState() {
 }
 
 function clearTopLevelFilterCache() {
-  topLevelFilterCaches.small.entries.clear();
-  topLevelFilterCaches.small.totalBytes = 0;
-  topLevelFilterCaches.medium.entries.clear();
-  topLevelFilterCaches.medium.totalBytes = 0;
-  syncClearFilterCacheButtonState();
+  filteringOrchestrator.clearTopLevelFilterCache();
 }
 
 function clearTopLevelSmartFilterState() {
-  topLevelSmartFilterStates.clear();
+  filteringOrchestrator.clearTopLevelSmartFilterState();
 }
 
 function bumpTopLevelFilterCacheRevision() {
-  topLevelFilterCacheRevision += 1;
-  clearTopLevelFilterCache();
-  clearTopLevelSmartFilterState();
+  filteringOrchestrator.bumpTopLevelFilterCacheRevision();
 }
 
 function normalizeFilterValueForTopLevelCache(value) {
@@ -660,134 +675,6 @@ function getActiveFiltersForOrchestration(rawFilters) {
   return activeFilters;
 }
 
-function cloneActiveFilters(activeFilters) {
-  const out = Object.create(null);
-  if (!activeFilters || typeof activeFilters !== "object") {
-    return out;
-  }
-
-  const keys = Object.keys(activeFilters);
-  for (let i = 0; i < keys.length; i += 1) {
-    const key = keys[i];
-    out[key] = activeFilters[key];
-  }
-
-  return out;
-}
-
-function areActiveFiltersStricter(nextFilters, previousFilters) {
-  const prev = previousFilters || Object.create(null);
-  const next = nextFilters || Object.create(null);
-  const prevKeys = Object.keys(prev);
-  const nextKeys = Object.keys(next);
-
-  if (nextKeys.length < prevKeys.length) {
-    return false;
-  }
-
-  let changed = false;
-
-  for (let i = 0; i < prevKeys.length; i += 1) {
-    const key = prevKeys[i];
-    const prevValue = prev[key];
-    const nextValue = next[key];
-
-    if (nextValue === undefined) {
-      return false;
-    }
-
-    if (!nextValue.startsWith(prevValue)) {
-      return false;
-    }
-
-    if (nextValue !== prevValue) {
-      changed = true;
-    }
-  }
-
-  if (nextKeys.length > prevKeys.length) {
-    changed = true;
-  }
-
-  return changed;
-}
-
-function buildRawFiltersWithoutGuaranteed(
-  sourceRawFilters,
-  fullActiveFilters,
-  guaranteedActiveFilters
-) {
-  const source =
-    sourceRawFilters && typeof sourceRawFilters === "object"
-      ? sourceRawFilters
-      : {};
-  const fullActive =
-    fullActiveFilters && typeof fullActiveFilters === "object"
-      ? fullActiveFilters
-      : Object.create(null);
-  const guaranteed =
-    guaranteedActiveFilters && typeof guaranteedActiveFilters === "object"
-      ? guaranteedActiveFilters
-      : Object.create(null);
-  const out = {};
-  const keys = Object.keys(source);
-
-  for (let i = 0; i < keys.length; i += 1) {
-    const key = keys[i];
-    const activeValue = fullActive[key];
-    const guaranteedValue = guaranteed[key];
-    const isGuaranteed =
-      activeValue !== undefined &&
-      guaranteedValue !== undefined &&
-      activeValue === guaranteedValue;
-    if (!isGuaranteed) {
-      out[key] = source[key];
-    }
-  }
-
-  return out;
-}
-
-function buildTopLevelSmartFilterStateKey(filterOptions) {
-  return [
-    `mode:${getCurrentFilterModeKey()}`,
-    "match:includes",
-    `norm:${filterOptions && filterOptions.enableCaching === true ? 1 : 0}`,
-    `dict:${filterOptions && filterOptions.useDictionaryKeySearch === true ? 1 : 0}`,
-    `dictIntersect:${filterOptions && filterOptions.useDictionaryIntersection === true ? 1 : 0}`,
-    `smartPlanner:${filterOptions && filterOptions.useSmarterPlanner === true ? 1 : 0}`,
-  ].join("\u0001");
-}
-
-function getTopLevelSmartFilterStateEntry(stateKey) {
-  if (!stateKey) {
-    return null;
-  }
-
-  return topLevelSmartFilterStates.get(stateKey) || null;
-}
-
-function setTopLevelSmartFilterStateEntry(
-  stateKey,
-  fullActiveFilters,
-  filteredIndices,
-  filteredCount,
-  indicesAlreadyStable
-) {
-  if (!stateKey) {
-    return;
-  }
-
-  topLevelSmartFilterStates.set(stateKey, {
-    fullActiveFilters: cloneActiveFilters(fullActiveFilters),
-    filteredIndices:
-      indicesAlreadyStable === true
-        ? filteredIndices
-        : cloneFilteredIndicesForTopLevelCache(filteredIndices),
-    filteredCount: Math.max(0, Number(filteredCount) || 0),
-  });
-}
-
 function getCurrentFilterModeKey() {
   if (currentLayout === "columnar" && currentColumnarMode === "binary") {
     return "binary-columnar";
@@ -804,166 +691,8 @@ function getCurrentFilterModeKey() {
   return "object-row";
 }
 
-function buildTopLevelFilterCacheKey(rawFilters, filterOptions) {
-  const normalizedEntries = [];
-  const sourceFilters =
-    rawFilters && typeof rawFilters === "object" ? rawFilters : {};
-  const keys = Object.keys(sourceFilters);
-  for (let i = 0; i < keys.length; i += 1) {
-    const key = keys[i];
-    const normalized = normalizeFilterValueForTopLevelCache(sourceFilters[key]);
-    if (normalized !== "") {
-      normalizedEntries.push(`${key}=${normalized}`);
-    }
-  }
-  normalizedEntries.sort();
-
-  return [
-    `rev:${topLevelFilterCacheRevision}`,
-    `mode:${getCurrentFilterModeKey()}`,
-    "match:includes",
-    `norm:${filterOptions && filterOptions.enableCaching === true ? 1 : 0}`,
-    `dict:${filterOptions && filterOptions.useDictionaryKeySearch === true ? 1 : 0}`,
-    `dictIntersect:${filterOptions && filterOptions.useDictionaryIntersection === true ? 1 : 0}`,
-    `smartPlanner:${filterOptions && filterOptions.useSmarterPlanner === true ? 1 : 0}`,
-    `filters:${normalizedEntries.join("\u0002")}`,
-  ].join("\u0001");
-}
-
-function cloneFilteredIndicesForTopLevelCache(filteredIndices) {
-  if (filteredIndices === null || filteredIndices === undefined) {
-    return null;
-  }
-
-  if (
-    filteredIndices &&
-    ArrayBuffer.isView(filteredIndices.buffer) &&
-    typeof filteredIndices.count === "number"
-  ) {
-    const count = Math.max(
-      0,
-      Math.min(filteredIndices.count | 0, filteredIndices.buffer.length)
-    );
-    const copy = new Uint32Array(count);
-    if (count > 0) {
-      copy.set(filteredIndices.buffer.subarray(0, count));
-    }
-    return {
-      buffer: copy,
-      count,
-    };
-  }
-
-  if (Array.isArray(filteredIndices)) {
-    return filteredIndices.slice();
-  }
-
-  if (ArrayBuffer.isView(filteredIndices)) {
-    const copy = new filteredIndices.constructor(filteredIndices.length);
-    copy.set(filteredIndices);
-    return copy;
-  }
-
-  return null;
-}
-
-function getTopLevelFilterCacheEntry(cache, cacheKey) {
-  const existing = cache.entries.get(cacheKey);
-  if (!existing) {
-    return null;
-  }
-
-  cache.entries.delete(cacheKey);
-  cache.entries.set(cacheKey, existing);
-  return existing;
-}
-
-function getTopLevelFilterCacheResultBytes(filteredIndices) {
-  if (
-    filteredIndices &&
-    ArrayBuffer.isView(filteredIndices.buffer) &&
-    typeof filteredIndices.count === "number"
-  ) {
-    return Math.max(0, filteredIndices.count | 0) * 4;
-  }
-
-  if (Array.isArray(filteredIndices) || ArrayBuffer.isView(filteredIndices)) {
-    return Math.max(0, filteredIndices.length | 0) * 4;
-  }
-
-  return 0;
-}
-
-function getTopLevelFilterCacheEntryFromTiers(cacheKey) {
-  const fromSmall = getTopLevelFilterCacheEntry(
-    topLevelFilterCaches.small,
-    cacheKey
-  );
-  if (fromSmall) {
-    return fromSmall;
-  }
-
-  return getTopLevelFilterCacheEntry(topLevelFilterCaches.medium, cacheKey);
-}
-
-function chooseTopLevelFilterCacheTier(resultCount) {
-  if (resultCount <= TOP_LEVEL_FILTER_CACHE_SMALL_MAX_RESULTS) {
-    return "small";
-  }
-
-  if (resultCount <= TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS) {
-    return "medium";
-  }
-
-  return "";
-}
-
-function setTopLevelFilterCacheEntryInTier(
-  tier,
-  cacheKey,
-  filteredIndices,
-  filteredCount,
-  searchedCount
-) {
-  const cache =
-    tier === "small"
-      ? topLevelFilterCaches.small
-      : topLevelFilterCaches.medium;
-
-  const entry = {
-    filteredIndices: cloneFilteredIndicesForTopLevelCache(filteredIndices),
-    filteredCount: Number(filteredCount) || 0,
-    searchedCount:
-      Number.isFinite(Number(searchedCount)) && Number(searchedCount) >= 0
-        ? Number(searchedCount)
-        : -1,
-    tier,
-  };
-  const bytes = getTopLevelFilterCacheResultBytes(entry.filteredIndices);
-
-  const previous = cache.entries.get(cacheKey);
-  if (previous) {
-    cache.totalBytes -= previous.bytes || 0;
-    cache.entries.delete(cacheKey);
-  }
-  entry.bytes = bytes;
-  cache.entries.set(cacheKey, entry);
-  cache.totalBytes += bytes;
-
-  while (cache.entries.size > cache.capacity) {
-    const oldestKey = cache.entries.keys().next().value;
-    const oldestEntry = cache.entries.get(oldestKey);
-    if (oldestEntry) {
-      cache.totalBytes -= oldestEntry.bytes || 0;
-    }
-    cache.entries.delete(oldestKey);
-  }
-
-  return entry;
-}
-
 function clearAllFilterCaches() {
-  clearTopLevelFilterCache();
+  filteringOrchestrator.clearAllFilterCaches();
 }
 
 function setSortTelemetryStatus(text) {
@@ -1269,81 +998,12 @@ function buildRowsSnapshotFromRawFilters(rawFilters) {
   return benchmarkSortRuntime.buildSortRowsSnapshot(runtimeRawFilters);
 }
 
-function resolveBenchmarkSnapshotIndices(rowsSnapshot, totalRowCount) {
-  if (Array.isArray(rowsSnapshot) && hasIndexCollection(rowsSnapshot.__rowIndices)) {
-    return materializeFilteredIndexArray(rowsSnapshot.__rowIndices, totalRowCount);
-  }
-
-  if (
-    rowsSnapshot &&
-    typeof rowsSnapshot === "object" &&
-    hasIndexCollection(rowsSnapshot.rowIndices)
-  ) {
-    return materializeFilteredIndexArray(rowsSnapshot.rowIndices, totalRowCount);
-  }
-
-  return null;
-}
-
 function runPrecomputedSortSnapshotBenchmarkPass(rowsSnapshot, descriptors) {
-  const descriptorList = normalizeSortDescriptorList(descriptors);
-  if (!Array.isArray(descriptorList) || descriptorList.length === 0) {
-    return benchmarkSortRuntime.runSortSnapshotPass(
-      rowsSnapshot,
-      descriptorList,
-      "native"
-    );
-  }
-
-  const loadedRowCount = getLoadedRowCount();
-  const snapshotIndices = resolveBenchmarkSnapshotIndices(
+  return sortBenchmarkOrchestrator.runPrecomputedSortSnapshotPass(
     rowsSnapshot,
-    loadedRowCount
+    descriptors,
+    getLoadedRowCount()
   );
-  if (!hasIndexCollection(snapshotIndices)) {
-    return benchmarkSortRuntime.runSortSnapshotPass(
-      rowsSnapshot,
-      descriptorList,
-      "native"
-    );
-  }
-
-  const snapshotCount = snapshotIndices.length;
-  const totalStartMs = performance.now();
-  const sortedRun = buildSortedIndicesViaPrecomputedMode(
-    snapshotIndices,
-    snapshotCount,
-    descriptorList,
-    loadedRowCount
-  );
-  if (
-    !sortedRun ||
-    !sortedRun.sortResult ||
-    !hasIndexCollection(sortedRun.sortedIndices)
-  ) {
-    return benchmarkSortRuntime.runSortSnapshotPass(
-      rowsSnapshot,
-      descriptorList,
-      "native"
-    );
-  }
-
-  const sortTotalMs = performance.now() - totalStartMs;
-  const sortCoreMs = Number(sortedRun.sortResult.durationMs) || 0;
-  return {
-    sortMs: sortCoreMs,
-    sortCoreMs,
-    sortPrepMs: sortTotalMs - sortCoreMs,
-    sortTotalMs,
-    sortMode: "precomputed",
-    sortedCount: sortedRun.sortedIndices.length,
-    descriptors:
-      sortedRun.sortResult.effectiveDescriptors ||
-      sortedRun.sortResult.descriptors ||
-      descriptorList,
-    dataPath: sortedRun.sortResult.dataPath,
-    comparatorMode: sortedRun.sortResult.comparatorMode || "precomputed",
-  };
 }
 
 function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
@@ -2188,233 +1848,11 @@ function ensureNumericColumnarSortedIndices(numericColumnarData) {
   );
 }
 
-function buildRankArrayForColumnFromSortedIndices(
-  numericColumnarData,
-  columnIndex,
-  sortedIndices,
-  rowCount
-) {
-  if (
-    !isValidNumericColumnarData(numericColumnarData) ||
-    !(sortedIndices instanceof Uint32Array) ||
-    sortedIndices.length !== rowCount
-  ) {
-    return null;
-  }
-
-  const columnKinds = numericColumnarData.columnKinds || [];
-  const columns = numericColumnarData.columns || [];
-  const columnKind = columnKinds[columnIndex];
-  const values = columns[columnIndex];
-  const rank32 = new Uint32Array(rowCount);
-  if (rowCount <= 0) {
-    return {
-      rankByRowId: rank32,
-      maxRank: 0,
-    };
-  }
-
-  let currentRank = 0;
-  const firstRowIndex = sortedIndices[0];
-  let previousToken = values ? values[firstRowIndex] : undefined;
-  rank32[firstRowIndex] = currentRank;
-
-  for (let i = 1; i < rowCount; i += 1) {
-    const rowIndex = sortedIndices[i];
-    const nextToken = values ? values[rowIndex] : undefined;
-    let isSame = false;
-
-    if (columnKind === "float") {
-      const previousNumber = Number(previousToken);
-      const nextNumber = Number(nextToken);
-      if (
-        (Number.isNaN(previousNumber) && Number.isNaN(nextNumber)) ||
-        previousNumber === nextNumber
-      ) {
-        isSame = true;
-      }
-    } else {
-      isSame = nextToken === previousToken;
-    }
-
-    if (!isSame) {
-      currentRank += 1;
-      previousToken = nextToken;
-    }
-
-    rank32[rowIndex] = currentRank;
-  }
-
-  if (currentRank <= 0xffff) {
-    const rank16 = new Uint16Array(rowCount);
-    rank16.set(rank32);
-    return {
-      rankByRowId: rank16,
-      maxRank: currentRank >>> 0,
-    };
-  }
-
-  return {
-    rankByRowId: rank32,
-    maxRank: currentRank >>> 0,
-  };
-}
-
-function buildDescendingRankArrayFromAscending(rankByRowId, maxRank, rowCount) {
-  if (
-    !isSupportedRankArray(rankByRowId) ||
-    rankByRowId.length !== rowCount
-  ) {
-    return null;
-  }
-
-  const maxRankValue = Number(maxRank) >>> 0;
-  if (maxRankValue <= 0xffff) {
-    const out16 = new Uint16Array(rowCount);
-    for (let i = 0; i < rowCount; i += 1) {
-      out16[i] = (maxRankValue - (rankByRowId[i] >>> 0)) >>> 0;
-    }
-    return out16;
-  }
-
-  const out32 = new Uint32Array(rowCount);
-  for (let i = 0; i < rowCount; i += 1) {
-    out32[i] = (maxRankValue - (rankByRowId[i] >>> 0)) >>> 0;
-  }
-  return out32;
-}
-
 function ensureNumericColumnarSortedRanks(numericColumnarData) {
-  if (!isValidNumericColumnarData(numericColumnarData)) {
-    return {
-      numericColumnarData,
-      durationMs: 0,
-      computedColumns: 0,
-    };
-  }
-
-  const rowCount = Math.max(0, Number(numericColumnarData.rowCount) || 0);
-  const sortedColumnarData = ensureNumericColumnarSortedIndices(numericColumnarData);
-  const sortedColumns = Array.isArray(sortedColumnarData.sortedIndexColumns)
-    ? sortedColumnarData.sortedIndexColumns
-    : [];
-  const baseCount = Math.min(columnKeys.length, sortedColumns.length);
-  const existingAscRankColumns = Array.isArray(sortedColumnarData.sortedRankAscColumns)
-    ? sortedColumnarData.sortedRankAscColumns
-    : Array.isArray(sortedColumnarData.sortedRankColumns)
-      ? sortedColumnarData.sortedRankColumns
-      : [];
-  const existingAscRankMaxColumns = Array.isArray(
-    sortedColumnarData.sortedRankAscMaxColumns
-  )
-    ? sortedColumnarData.sortedRankAscMaxColumns
-    : Array.isArray(sortedColumnarData.sortedRankMaxColumns)
-      ? sortedColumnarData.sortedRankMaxColumns
-      : [];
-  const existingDescRankColumns = Array.isArray(sortedColumnarData.sortedRankDescColumns)
-    ? sortedColumnarData.sortedRankDescColumns
-    : [];
-  const existingDescRankMaxColumns = Array.isArray(
-    sortedColumnarData.sortedRankDescMaxColumns
-  )
-    ? sortedColumnarData.sortedRankDescMaxColumns
-    : [];
-  const ascRankColumns = new Array(baseCount).fill(null);
-  const ascRankMaxColumns = new Array(baseCount).fill(0);
-  const ascRankByKey = Object.create(null);
-  const ascRankMaxByKey = Object.create(null);
-  const descRankColumns = new Array(baseCount).fill(null);
-  const descRankMaxColumns = new Array(baseCount).fill(0);
-  const descRankByKey = Object.create(null);
-  const descRankMaxByKey = Object.create(null);
-  const startMs = performance.now();
-  let computedColumns = 0;
-
-  for (let colIndex = 0; colIndex < baseCount; colIndex += 1) {
-    const sortedIndices = sortedColumns[colIndex];
-    if (!(sortedIndices instanceof Uint32Array) || sortedIndices.length !== rowCount) {
-      continue;
-    }
-
-    const existingAscRank = existingAscRankColumns[colIndex];
-    const existingAscMax = Number(existingAscRankMaxColumns[colIndex]);
-    let ascRankByRowId = null;
-    let ascMaxRank = 0;
-    if (isSupportedRankArray(existingAscRank) && existingAscRank.length === rowCount) {
-      ascRankByRowId = existingAscRank;
-      ascMaxRank = Number.isFinite(existingAscMax)
-        ? Math.max(0, existingAscMax) >>> 0
-        : rowCount > 0
-          ? existingAscRank[sortedIndices[rowCount - 1]] >>> 0
-          : 0;
-    } else {
-      const builtRank = buildRankArrayForColumnFromSortedIndices(
-        sortedColumnarData,
-        colIndex,
-        sortedIndices,
-        rowCount
-      );
-      if (!builtRank || !isSupportedRankArray(builtRank.rankByRowId)) {
-        continue;
-      }
-
-      ascRankByRowId = builtRank.rankByRowId;
-      ascMaxRank = Number(builtRank.maxRank) >>> 0;
-      computedColumns += 1;
-    }
-
-    ascRankColumns[colIndex] = ascRankByRowId;
-    ascRankMaxColumns[colIndex] = ascMaxRank;
-
-    const existingDescRank = existingDescRankColumns[colIndex];
-    const existingDescMax = Number(existingDescRankMaxColumns[colIndex]);
-    let descRankByRowId = null;
-    if (isSupportedRankArray(existingDescRank) && existingDescRank.length === rowCount) {
-      descRankByRowId = existingDescRank;
-      descRankMaxColumns[colIndex] = Number.isFinite(existingDescMax)
-        ? Math.max(0, existingDescMax) >>> 0
-        : ascMaxRank;
-    } else {
-      const builtDescRank = buildDescendingRankArrayFromAscending(
-        ascRankByRowId,
-        ascMaxRank,
-        rowCount
-      );
-      if (!isSupportedRankArray(builtDescRank)) {
-        continue;
-      }
-      descRankByRowId = builtDescRank;
-      descRankMaxColumns[colIndex] = ascMaxRank;
-      computedColumns += 1;
-    }
-    descRankColumns[colIndex] = descRankByRowId;
-
-    const columnKey = columnKeys[colIndex];
-    ascRankByKey[columnKey] = ascRankByRowId;
-    ascRankMaxByKey[columnKey] = ascMaxRank;
-    descRankByKey[columnKey] = descRankByRowId;
-    descRankMaxByKey[columnKey] = descRankMaxColumns[colIndex];
-  }
-
-  sortedColumnarData.sortedRankAscColumns = ascRankColumns;
-  sortedColumnarData.sortedRankAscByKey = ascRankByKey;
-  sortedColumnarData.sortedRankAscMaxColumns = ascRankMaxColumns;
-  sortedColumnarData.sortedRankAscMaxByKey = ascRankMaxByKey;
-  sortedColumnarData.sortedRankDescColumns = descRankColumns;
-  sortedColumnarData.sortedRankDescByKey = descRankByKey;
-  sortedColumnarData.sortedRankDescMaxColumns = descRankMaxColumns;
-  sortedColumnarData.sortedRankDescMaxByKey = descRankMaxByKey;
-  // Back-compat aliases for existing call sites: default rank = ascending.
-  sortedColumnarData.sortedRankColumns = ascRankColumns;
-  sortedColumnarData.sortedRankByKey = ascRankByKey;
-  sortedColumnarData.sortedRankMaxColumns = ascRankMaxColumns;
-  sortedColumnarData.sortedRankMaxByKey = ascRankMaxByKey;
-
-  return {
-    numericColumnarData: sortedColumnarData,
-    durationMs: performance.now() - startMs,
-    computedColumns,
-  };
+  return ensureCoreNumericColumnarSortedRanks(
+    numericColumnarData,
+    getFastTableSchema()
+  );
 }
 
 function applyWorkerPrebuiltDerivedData(derivedData) {
@@ -4966,6 +4404,22 @@ function applyFiltersNumericColumnarPath(rawFilters, filterOptions, baseIndices)
   };
 }
 
+function applyFilterPath(rawFilters, filterOptions, baseIndices) {
+  if (currentLayout === "columnar" && currentColumnarMode === "binary") {
+    return applyFiltersNumericColumnarPath(rawFilters, filterOptions, baseIndices);
+  }
+
+  if (currentLayout === "columnar") {
+    return applyFiltersObjectColumnarPath(rawFilters, filterOptions, baseIndices);
+  }
+
+  if (currentRepresentation === "numeric") {
+    return applyFiltersNumericRowPath(rawFilters, filterOptions, baseIndices);
+  }
+
+  return applyFiltersObjectRowPath(rawFilters, filterOptions, baseIndices);
+}
+
 function getCurrentFilterResultSnapshot() {
   if (currentLayout === "columnar" && currentColumnarMode === "binary") {
     return {
@@ -5122,8 +4576,6 @@ function runFiltersWithRawFilters(rawFilters, options) {
     rawFilters && typeof rawFilters === "object" ? rawFilters : {};
   const fullActiveFilters = getActiveFiltersForOrchestration(sourceRawFilters);
   const active = Object.keys(fullActiveFilters).length > 0;
-  const smartStateKey = buildTopLevelSmartFilterStateKey(filterOptions);
-  const smartState = getTopLevelSmartFilterStateEntry(smartStateKey);
 
   if (getLoadedRowCount() === 0) {
     if (!skipRender) {
@@ -5138,252 +4590,29 @@ function runFiltersWithRawFilters(rawFilters, options) {
     return null;
   }
 
-  const filterCoreStart = performance.now();
-  const useTopLevelFilterCache =
-    filterOptions.useFilterCache === true && active;
-  let selectedBaseCandidateCount = -1;
-  let topLevelCacheKey = "";
-  let topLevelCacheEvent = {
-    enabled: useTopLevelFilterCache,
-    hit: false,
-    inserted: false,
-    tier: "",
-    skippedReason: "",
-    lookupMs: 0,
-    insertMs: 0,
-    resultCount: 0,
-    searchedCount: -1,
-    smallSizeBytes: topLevelFilterCaches.small.totalBytes,
-    smallEntryCount: topLevelFilterCaches.small.entries.size,
-    smallCapacity: topLevelFilterCaches.small.capacity,
-    mediumSizeBytes: topLevelFilterCaches.medium.totalBytes,
-    mediumEntryCount: topLevelFilterCaches.medium.entries.size,
-    mediumCapacity: topLevelFilterCaches.medium.capacity,
-  };
-  let filterResult = null;
-  let matchedTopLevelCacheEntry = null;
-  if (useTopLevelFilterCache) {
-    topLevelCacheKey = buildTopLevelFilterCacheKey(
-      sourceRawFilters,
-      filterOptions
-    );
-    const cacheLookupStartMs = performance.now();
-    const cachedEntry = getTopLevelFilterCacheEntryFromTiers(topLevelCacheKey);
-    topLevelCacheEvent.lookupMs = performance.now() - cacheLookupStartMs;
-    if (cachedEntry) {
-      matchedTopLevelCacheEntry = cachedEntry;
-      filterResult = buildFilterResultFromCachedEntry(cachedEntry);
-      syncActiveControllerIndices(filterResult.filteredIndices);
-      topLevelCacheEvent.hit = true;
-      topLevelCacheEvent.resultCount = Number(cachedEntry.filteredCount) || 0;
-      selectedBaseCandidateCount = Number(cachedEntry.searchedCount);
-      if (
-        !Number.isFinite(selectedBaseCandidateCount) ||
-        selectedBaseCandidateCount < 0
-      ) {
-        const cachedResultCount = Number(cachedEntry.filteredCount);
-        selectedBaseCandidateCount =
-          Number.isFinite(cachedResultCount) && cachedResultCount >= 0
-            ? Math.floor(cachedResultCount)
-            : -1;
-      } else {
-        selectedBaseCandidateCount = Math.max(
-          0,
-          Math.floor(selectedBaseCandidateCount)
-        );
-      }
-      topLevelCacheEvent.searchedCount = selectedBaseCandidateCount;
-      topLevelCacheEvent.tier = cachedEntry.tier || "";
-      topLevelCacheEvent.smallSizeBytes = topLevelFilterCaches.small.totalBytes;
-      topLevelCacheEvent.smallEntryCount = topLevelFilterCaches.small.entries.size;
-      topLevelCacheEvent.mediumSizeBytes = topLevelFilterCaches.medium.totalBytes;
-      topLevelCacheEvent.mediumEntryCount = topLevelFilterCaches.medium.entries.size;
-    }
+  const orchestration = filteringOrchestrator.runFilterPass(sourceRawFilters, {
+    filterOptions,
+  });
+  const filterResult = orchestration ? orchestration.filterResult : null;
+  if (!filterResult) {
+    return null;
   }
-
-  let effectiveRawFilters = sourceRawFilters;
-  let baseIndices = undefined;
-  let dictionaryKeySearchPlan = null;
-  if (filterResult === null && active) {
-    let smartCandidate = null;
-    let dictionarySearchRawFilters = sourceRawFilters;
-    if (filterOptions && filterOptions.useSmartFiltering === true && smartState) {
-      const previousActiveFilters =
-        smartState.fullActiveFilters || Object.create(null);
-      if (areActiveFiltersStricter(fullActiveFilters, previousActiveFilters)) {
-        let smartCandidateCount = Number(smartState.filteredCount);
-        if (!Number.isFinite(smartCandidateCount) || smartCandidateCount < 0) {
-          smartCandidateCount = getFilteredIndicesCount(
-            smartState.filteredIndices,
-            getLoadedRowCount()
-          );
-        }
-        smartCandidateCount = Math.max(0, smartCandidateCount);
-        smartCandidate = {
-          source: "smart",
-          baseIndices: smartState.filteredIndices,
-          count: smartCandidateCount,
-          guaranteedActiveFilters: previousActiveFilters,
-        };
-        dictionarySearchRawFilters = buildRawFiltersWithoutGuaranteed(
-          sourceRawFilters,
-          fullActiveFilters,
-          previousActiveFilters
-        );
-      }
-    }
-
-    dictionaryKeySearchPlan = buildDictionaryKeySearchPlan(
-      dictionarySearchRawFilters,
-      filterOptions
-    );
-
-    let dictionaryCandidate = null;
-    if (dictionaryKeySearchPlan && dictionaryKeySearchPlan.used) {
-      const guaranteedColumnKeys =
-        Array.isArray(dictionaryKeySearchPlan.guaranteedColumnKeys) &&
-        dictionaryKeySearchPlan.guaranteedColumnKeys.length > 0
-          ? dictionaryKeySearchPlan.guaranteedColumnKeys
-          : dictionaryKeySearchPlan.selectedColumnKey
-            ? [dictionaryKeySearchPlan.selectedColumnKey]
-            : [];
-      const guaranteedFilters = Object.create(null);
-      for (let i = 0; i < guaranteedColumnKeys.length; i += 1) {
-        const key = guaranteedColumnKeys[i];
-        if (fullActiveFilters[key] !== undefined) {
-          guaranteedFilters[key] = fullActiveFilters[key];
-        }
-      }
-      dictionaryCandidate = {
-        source: "dict",
-        baseIndices: dictionaryKeySearchPlan.baseIndices,
-        count: Math.max(0, Number(dictionaryKeySearchPlan.candidateCount) || 0),
-        guaranteedActiveFilters: guaranteedFilters,
-      };
-    }
-
-    let chosenBaseCandidate = smartCandidate;
-    if (
-      dictionaryCandidate &&
-      (!chosenBaseCandidate || dictionaryCandidate.count < chosenBaseCandidate.count)
-    ) {
-      chosenBaseCandidate = dictionaryCandidate;
-    }
-
-    if (chosenBaseCandidate) {
-      baseIndices = chosenBaseCandidate.baseIndices;
-      selectedBaseCandidateCount = chosenBaseCandidate.count;
-      topLevelCacheEvent.searchedCount = selectedBaseCandidateCount;
-      effectiveRawFilters = buildRawFiltersWithoutGuaranteed(
-        sourceRawFilters,
-        fullActiveFilters,
-        chosenBaseCandidate.guaranteedActiveFilters
-      );
-    }
-  }
-
-  if (filterResult === null) {
-    if (currentLayout === "columnar" && currentColumnarMode === "binary") {
-      filterResult = applyFiltersNumericColumnarPath(
-        effectiveRawFilters,
-        filterOptions,
-        baseIndices
-      );
-    } else if (currentLayout === "columnar") {
-      filterResult = applyFiltersObjectColumnarPath(
-        effectiveRawFilters,
-        filterOptions,
-        baseIndices
-      );
-    } else if (currentRepresentation === "numeric") {
-      filterResult = applyFiltersNumericRowPath(
-        effectiveRawFilters,
-        filterOptions,
-        baseIndices
-      );
-    } else {
-      filterResult = applyFiltersObjectRowPath(
-        effectiveRawFilters,
-        filterOptions,
-        baseIndices
-      );
-    }
-  }
-
-  const filterCoreEnd = performance.now();
-  const filterCoreDurationMs = filterCoreEnd - filterCoreStart;
-  let insertedTopLevelCacheEntry = null;
-  if (useTopLevelFilterCache && !topLevelCacheEvent.hit) {
-    const resultCount = Number(filterResult.filteredCount) || 0;
-    topLevelCacheEvent.resultCount = resultCount;
-    if (!(filterCoreDurationMs > TOP_LEVEL_FILTER_CACHE_MIN_INSERT_MS)) {
-      topLevelCacheEvent.skippedReason = "core";
-    } else {
-      const tier = chooseTopLevelFilterCacheTier(resultCount);
-      if (tier === "") {
-        topLevelCacheEvent.skippedReason = "size";
-      } else {
-        topLevelCacheEvent.tier = tier;
-        const cacheInsertStartMs = performance.now();
-        const insertedEntry = setTopLevelFilterCacheEntryInTier(
-          tier,
-          topLevelCacheKey,
-          filterResult.filteredIndices,
-          resultCount,
-          selectedBaseCandidateCount >= 0
-            ? selectedBaseCandidateCount
-            : getLoadedRowCount()
-        );
-        insertedTopLevelCacheEntry = insertedEntry;
-        topLevelCacheEvent.insertMs = performance.now() - cacheInsertStartMs;
-        topLevelCacheEvent.inserted = true;
-        if (insertedEntry && typeof insertedEntry.tier === "string") {
-          topLevelCacheEvent.tier = insertedEntry.tier;
-        }
-      }
-    }
-    topLevelCacheEvent.smallSizeBytes = topLevelFilterCaches.small.totalBytes;
-    topLevelCacheEvent.smallEntryCount = topLevelFilterCaches.small.entries.size;
-    topLevelCacheEvent.mediumSizeBytes = topLevelFilterCaches.medium.totalBytes;
-    topLevelCacheEvent.mediumEntryCount = topLevelFilterCaches.medium.entries.size;
-  }
-  if (useTopLevelFilterCache && topLevelCacheEvent.hit) {
-    topLevelCacheEvent.smallSizeBytes = topLevelFilterCaches.small.totalBytes;
-    topLevelCacheEvent.smallEntryCount = topLevelFilterCaches.small.entries.size;
-    topLevelCacheEvent.mediumSizeBytes = topLevelFilterCaches.medium.totalBytes;
-    topLevelCacheEvent.mediumEntryCount = topLevelFilterCaches.medium.entries.size;
-  }
-
-  if (filterOptions && filterOptions.useSmartFiltering === true) {
-    if (matchedTopLevelCacheEntry) {
-      setTopLevelSmartFilterStateEntry(
-        smartStateKey,
-        fullActiveFilters,
-        matchedTopLevelCacheEntry.filteredIndices,
-        matchedTopLevelCacheEntry.filteredCount,
-        true
-      );
-    } else if (
-      insertedTopLevelCacheEntry &&
-      insertedTopLevelCacheEntry.filteredIndices !== undefined
-    ) {
-      setTopLevelSmartFilterStateEntry(
-        smartStateKey,
-        fullActiveFilters,
-        insertedTopLevelCacheEntry.filteredIndices,
-        insertedTopLevelCacheEntry.filteredCount,
-        true
-      );
-    } else {
-      setTopLevelSmartFilterStateEntry(
-        smartStateKey,
-        fullActiveFilters,
-        filterResult.filteredIndices,
-        filterResult.filteredCount,
-        false
-      );
-    }
-  }
+  const selectedBaseCandidateCount =
+    orchestration && Number.isFinite(orchestration.selectedBaseCandidateCount)
+      ? Number(orchestration.selectedBaseCandidateCount)
+      : -1;
+  const topLevelCacheEvent =
+    orchestration && orchestration.topLevelCacheEvent
+      ? orchestration.topLevelCacheEvent
+      : null;
+  const dictionaryKeySearchPlan =
+    orchestration && orchestration.dictionaryKeySearchPlan
+      ? orchestration.dictionaryKeySearchPlan
+      : null;
+  const filterCoreDurationMs =
+    orchestration && Number.isFinite(orchestration.coreMs)
+      ? Number(orchestration.coreMs)
+      : 0;
 
   let sortRun = null;
   let renderIndices = filterResult.filteredIndices;
@@ -5404,7 +4633,7 @@ function runFiltersWithRawFilters(rawFilters, options) {
   if (!skipRender) {
     renderFilterResultByCurrentMode(filterResult, renderIndices, keepScroll);
   }
-  let renderEnd = filterCoreEnd;
+  let renderEnd = 0;
   if (!skipRender) {
     renderEnd = performance.now();
   }
@@ -5414,7 +4643,7 @@ function runFiltersWithRawFilters(rawFilters, options) {
   }
   const totalDurationMs = skipRender
     ? filterCoreDurationMs
-    : renderEnd - filterCoreStart;
+    : filterCoreDurationMs + renderDurationMs;
   const reverseIndexMs =
     dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
       ? dictionaryKeySearchPlan.durationMs

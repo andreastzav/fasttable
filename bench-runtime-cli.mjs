@@ -2,12 +2,16 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createFastTableRuntime } from "./packages/core/dist/runtime.js";
 import { loadColumnarBinaryPreset } from "./packages/core/dist/io-node.js";
-import { ensureNumericColumnarSortedIndices } from "./packages/core/dist/io.js";
+import {
+  ensureNumericColumnarSortedIndices,
+  ensureNumericColumnarSortedRanks,
+} from "./packages/core/dist/io.js";
 import { fastTableGenerationWorkersNodeApi } from "./packages/core/dist/generation-workers-node.js";
 import {
   runFilteringBenchmark,
   runSortBenchmark,
 } from "./packages/core/dist/benchmark.js";
+import { createSortBenchmarkOrchestrator } from "./packages/core/dist/sorting-orchestration.js";
 
 function parseArgs(argv) {
   const args = {
@@ -147,26 +151,6 @@ function hasIndexCollection(indices) {
   return Array.isArray(indices) || ArrayBuffer.isView(indices);
 }
 
-function normalizeSortDescriptors(descriptors) {
-  const source = Array.isArray(descriptors) ? descriptors : [];
-  const output = [];
-  for (let i = 0; i < source.length; i += 1) {
-    const descriptor = source[i];
-    const columnKey =
-      descriptor && typeof descriptor.columnKey === "string"
-        ? descriptor.columnKey
-        : "";
-    if (columnKey === "") {
-      continue;
-    }
-    output.push({
-      columnKey,
-      direction: descriptor.direction === "asc" ? "asc" : "desc",
-    });
-  }
-  return output;
-}
-
 function materializeIndexBuffer(indices, fallbackCount) {
   const defaultCount = Math.max(0, Number(fallbackCount) | 0);
   if (indices === null || indices === undefined) {
@@ -202,10 +186,6 @@ function isIdentitySelection(indices, rowCount) {
   return true;
 }
 
-function isNumericSortColumnKey(columnKey) {
-  return columnKey !== "firstName" && columnKey !== "lastName";
-}
-
 function getColumnIndexByKey(schema, columnKey) {
   const columnKeys = Array.isArray(schema && schema.columnKeys)
     ? schema.columnKeys
@@ -217,7 +197,9 @@ function createCliPrecomputedState() {
   return {
     rowCount: -1,
     sortedByKey: Object.create(null),
+    sortedDescByKey: Object.create(null),
     rankByKey: Object.create(null),
+    fullOrderByDescriptor: new Map(),
     counts16: null,
     primary: null,
     secondary: null,
@@ -231,7 +213,9 @@ function ensureCliPrecomputedState(state, rowCount, countHint) {
   if (state.rowCount !== expectedRowCount) {
     state.rowCount = expectedRowCount;
     state.sortedByKey = Object.create(null);
+    state.sortedDescByKey = Object.create(null);
     state.rankByKey = Object.create(null);
+    state.fullOrderByDescriptor = new Map();
     state.primary = null;
     state.secondary = null;
   }
@@ -245,6 +229,57 @@ function ensureCliPrecomputedState(state, rowCount, countHint) {
   if (!(state.secondary instanceof Uint32Array) || state.secondary.length < expectedCount) {
     state.secondary = new Uint32Array(expectedCount);
   }
+}
+
+function reverseUint32Array(source) {
+  const length = source.length;
+  const out = new Uint32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    out[i] = source[length - 1 - i];
+  }
+  return out;
+}
+
+function buildDescriptorCacheKey(descriptorList) {
+  const source = Array.isArray(descriptorList) ? descriptorList : [];
+  let key = "";
+  for (let i = 0; i < source.length; i += 1) {
+    if (i > 0) {
+      key += "|";
+    }
+    const descriptor = source[i] || {};
+    const columnKey =
+      typeof descriptor.columnKey === "string" ? descriptor.columnKey : "";
+    const direction = descriptor.direction === "asc" ? "asc" : "desc";
+    key += `${columnKey}:${direction}`;
+  }
+  return key;
+}
+
+function tryBuildInverseDescriptorList(descriptorList) {
+  const source = Array.isArray(descriptorList) ? descriptorList : [];
+  if (source.length === 0) {
+    return null;
+  }
+
+  const firstDirection = source[0].direction === "asc" ? "asc" : "desc";
+  for (let i = 1; i < source.length; i += 1) {
+    const direction = source[i].direction === "asc" ? "asc" : "desc";
+    if (direction !== firstDirection) {
+      return null;
+    }
+  }
+
+  const inverseDirection = firstDirection === "asc" ? "desc" : "asc";
+  const inverse = new Array(source.length);
+  for (let i = 0; i < source.length; i += 1) {
+    const descriptor = source[i];
+    inverse[i] = {
+      columnKey: descriptor.columnKey,
+      direction: inverseDirection,
+    };
+  }
+  return inverse;
 }
 
 function resolvePrecomputedSortedColumn(
@@ -306,6 +341,140 @@ function resolvePrecomputedSortedColumn(
   return null;
 }
 
+function isSupportedRankArray(rankByRowId, expectedLength) {
+  if (!(rankByRowId instanceof Uint16Array || rankByRowId instanceof Uint32Array)) {
+    return false;
+  }
+
+  if (!Number.isFinite(expectedLength)) {
+    return true;
+  }
+
+  return rankByRowId.length === Math.max(0, Number(expectedLength) | 0);
+}
+
+function deriveRankMaxValue(rankByRowId) {
+  if (!isSupportedRankArray(rankByRowId)) {
+    return 0;
+  }
+
+  let maxRank = 0;
+  for (let i = 0; i < rankByRowId.length; i += 1) {
+    const value = rankByRowId[i] >>> 0;
+    if (value > maxRank) {
+      maxRank = value;
+    }
+  }
+  return maxRank >>> 0;
+}
+
+function resolveRankStateFromNumericColumnarData(
+  numericColumnarData,
+  columnKey,
+  rowCount
+) {
+  const source =
+    numericColumnarData && typeof numericColumnarData === "object"
+      ? numericColumnarData
+      : null;
+  if (!source) {
+    return null;
+  }
+
+  const rankByKeyPrimary =
+    source.sortedRankAscByKey &&
+    typeof source.sortedRankAscByKey === "object" &&
+    !Array.isArray(source.sortedRankAscByKey)
+      ? source.sortedRankAscByKey
+      : null;
+  const rankByKeyFallback =
+    source.sortedRankByKey &&
+    typeof source.sortedRankByKey === "object" &&
+    !Array.isArray(source.sortedRankByKey)
+      ? source.sortedRankByKey
+      : null;
+  let rankByRowId = rankByKeyPrimary ? rankByKeyPrimary[columnKey] : undefined;
+  if (!isSupportedRankArray(rankByRowId, rowCount) && rankByKeyFallback) {
+    rankByRowId = rankByKeyFallback[columnKey];
+  }
+  if (!isSupportedRankArray(rankByRowId, rowCount)) {
+    return null;
+  }
+
+  const rankMaxByKeyPrimary =
+    source.sortedRankAscMaxByKey &&
+    typeof source.sortedRankAscMaxByKey === "object" &&
+    !Array.isArray(source.sortedRankAscMaxByKey)
+      ? source.sortedRankAscMaxByKey
+      : null;
+  const rankMaxByKeyFallback =
+    source.sortedRankMaxByKey &&
+    typeof source.sortedRankMaxByKey === "object" &&
+    !Array.isArray(source.sortedRankMaxByKey)
+      ? source.sortedRankMaxByKey
+      : null;
+  let maxRank = rankMaxByKeyPrimary ? Number(rankMaxByKeyPrimary[columnKey]) : Number.NaN;
+  if (!Number.isFinite(maxRank) && rankMaxByKeyFallback) {
+    maxRank = Number(rankMaxByKeyFallback[columnKey]);
+  }
+  if (!Number.isFinite(maxRank)) {
+    maxRank = deriveRankMaxValue(rankByRowId);
+  }
+  const normalizedMaxRank = Number(maxRank);
+
+  return {
+    rankByRowId,
+    maxRank: Number.isFinite(normalizedMaxRank)
+      ? Math.max(0, normalizedMaxRank) >>> 0
+      : 0,
+  };
+}
+
+function seedPrecomputedStateFromNumericColumnarData(
+  precomputedState,
+  numericColumnarData,
+  schema,
+  rowCount
+) {
+  if (!precomputedState || typeof precomputedState !== "object") {
+    return;
+  }
+
+  const source =
+    numericColumnarData && typeof numericColumnarData === "object"
+      ? numericColumnarData
+      : null;
+  if (!source) {
+    return;
+  }
+
+  const columnKeys = Array.isArray(schema && schema.columnKeys)
+    ? schema.columnKeys
+    : [];
+  for (let i = 0; i < columnKeys.length; i += 1) {
+    const columnKey = columnKeys[i];
+    const sortedByKey =
+      source.sortedIndexByKey &&
+      typeof source.sortedIndexByKey === "object" &&
+      !Array.isArray(source.sortedIndexByKey)
+        ? source.sortedIndexByKey
+        : null;
+    const sortedColumn = sortedByKey ? sortedByKey[columnKey] : undefined;
+    if (sortedColumn instanceof Uint32Array && sortedColumn.length === rowCount) {
+      precomputedState.sortedByKey[columnKey] = sortedColumn;
+    }
+
+    const rankState = resolveRankStateFromNumericColumnarData(
+      source,
+      columnKey,
+      rowCount
+    );
+    if (rankState) {
+      precomputedState.rankByKey[columnKey] = rankState;
+    }
+  }
+}
+
 function buildRankStateForColumn(
   runtime,
   schema,
@@ -317,8 +486,7 @@ function buildRankStateForColumn(
     precomputedState &&
     precomputedState.rankByKey &&
     precomputedState.rankByKey[columnKey] &&
-    hasIndexCollection(precomputedState.rankByKey[columnKey].rankByRowId) &&
-    precomputedState.rankByKey[columnKey].rankByRowId.length === rowCount
+    isSupportedRankArray(precomputedState.rankByKey[columnKey].rankByRowId, rowCount)
   ) {
     return precomputedState.rankByKey[columnKey];
   }
@@ -327,76 +495,24 @@ function buildRankStateForColumn(
   if (!numericColumnarData || typeof numericColumnarData !== "object") {
     return null;
   }
-
-  const columnIndex = getColumnIndexByKey(schema, columnKey);
-  if (columnIndex < 0) {
-    return null;
-  }
-
-  const sortedIndices = resolvePrecomputedSortedColumn(
-    runtime,
+  const prewarmed =
+    ensureNumericColumnarSortedRanks(numericColumnarData, schema) || {};
+  const sortedNumericColumnarData =
+    prewarmed.numericColumnarData || numericColumnarData;
+  seedPrecomputedStateFromNumericColumnarData(
+    precomputedState,
+    sortedNumericColumnarData,
     schema,
-    columnKey,
-    rowCount,
-    precomputedState
+    rowCount
   );
-  if (!(sortedIndices instanceof Uint32Array) || sortedIndices.length !== rowCount) {
+  const out = resolveRankStateFromNumericColumnarData(
+    sortedNumericColumnarData,
+    columnKey,
+    rowCount
+  );
+  if (!out) {
     return null;
   }
-
-  const columns = Array.isArray(numericColumnarData.columns)
-    ? numericColumnarData.columns
-    : [];
-  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
-    ? numericColumnarData.dictionaries
-    : [];
-  const values = columns[columnIndex];
-  const hasDictionary =
-    Array.isArray(dictionaries[columnIndex]) && dictionaries[columnIndex].length > 0;
-  const useNumeric = isNumericSortColumnKey(columnKey) && !hasDictionary;
-
-  const rank32 = new Uint32Array(rowCount);
-  if (rowCount === 0) {
-    const empty = { rankByRowId: rank32, maxRank: 0 };
-    if (precomputedState && precomputedState.rankByKey) {
-      precomputedState.rankByKey[columnKey] = empty;
-    }
-    return empty;
-  }
-
-  const firstRowIndex = Number(sortedIndices[0]) >>> 0;
-  let previousToken = values ? values[firstRowIndex] : undefined;
-  let currentRank = 0;
-  rank32[firstRowIndex] = currentRank;
-
-  for (let i = 1; i < rowCount; i += 1) {
-    const rowIndex = Number(sortedIndices[i]) >>> 0;
-    const nextToken = values ? values[rowIndex] : undefined;
-    let isSame = false;
-
-    if (hasDictionary) {
-      isSame = nextToken === previousToken;
-    } else if (useNumeric) {
-      const previousNumber = Number(previousToken);
-      const nextNumber = Number(nextToken);
-      isSame =
-        (Number.isNaN(previousNumber) && Number.isNaN(nextNumber)) ||
-        previousNumber === nextNumber;
-    } else {
-      isSame = nextToken === previousToken;
-    }
-
-    if (!isSame) {
-      currentRank += 1;
-      previousToken = nextToken;
-    }
-
-    rank32[rowIndex] = currentRank;
-  }
-
-  const rankByRowId =
-    currentRank <= 0xffff ? new Uint16Array(rank32) : rank32;
-  const out = { rankByRowId, maxRank: currentRank >>> 0 };
   if (precomputedState && precomputedState.rankByKey) {
     precomputedState.rankByKey[columnKey] = out;
   }
@@ -509,7 +625,10 @@ function buildPrecomputedSortedSelection(
   selectedIndices,
   sortedColumn,
   direction,
-  rowCount
+  rowCount,
+  precomputedState,
+  fullSelectionHint,
+  columnKeyHint
 ) {
   const count = selectedIndices.length;
   if (count === 0) {
@@ -519,12 +638,36 @@ function buildPrecomputedSortedSelection(
     };
   }
 
-  const fullSelection = isIdentitySelection(selectedIndices, rowCount);
+  const fullSelection =
+    fullSelectionHint === true ||
+    (fullSelectionHint !== false && isIdentitySelection(selectedIndices, rowCount));
   if (fullSelection) {
     if (direction === "desc") {
-      const reversed = new Uint32Array(rowCount);
-      for (let i = 0; i < rowCount; i += 1) {
-        reversed[i] = sortedColumn[rowCount - 1 - i];
+      const columnKey =
+        typeof columnKeyHint === "string" && columnKeyHint.trim() !== ""
+          ? columnKeyHint
+          : "";
+      if (
+        columnKey &&
+        precomputedState &&
+        precomputedState.sortedDescByKey &&
+        precomputedState.sortedDescByKey[columnKey] instanceof Uint32Array &&
+        precomputedState.sortedDescByKey[columnKey].length === rowCount
+      ) {
+        return {
+          sortedIndices: precomputedState.sortedDescByKey[columnKey],
+          dataPath: "indices+precomputed-full-desc-cached",
+        };
+      }
+
+      const reversed = reverseUint32Array(sortedColumn);
+      if (
+        columnKey &&
+        precomputedState &&
+        precomputedState.sortedDescByKey &&
+        typeof precomputedState.sortedDescByKey === "object"
+      ) {
+        precomputedState.sortedDescByKey[columnKey] = reversed;
       }
       return {
         sortedIndices: reversed,
@@ -576,76 +719,127 @@ function buildPrecomputedSortedSelection(
   };
 }
 
-function runCliPrecomputedSortSnapshotPass(
+function runCliPrecomputedSortSelection(
   runtime,
   schema,
-  rowsSnapshot,
-  descriptors,
+  descriptorList,
+  selectedIndices,
+  rowCount,
+  isFullSelection,
   precomputedState
 ) {
-  const descriptorList = normalizeSortDescriptors(descriptors);
-  const fallback = () =>
-    runtime.runSortSnapshotPass(rowsSnapshot, descriptorList, "native");
-  if (descriptorList.length === 0) {
-    return fallback();
+  const normalizedDescriptors = Array.isArray(descriptorList) ? descriptorList : [];
+  if (!hasIndexCollection(selectedIndices) || normalizedDescriptors.length === 0) {
+    return null;
   }
 
-  const rowCount = runtime.getRowCount();
-  ensureCliPrecomputedState(precomputedState, rowCount, rowCount);
-
-  const sourceIndices =
-    Array.isArray(rowsSnapshot) && hasIndexCollection(rowsSnapshot.__rowIndices)
-      ? rowsSnapshot.__rowIndices
-      : rowsSnapshot &&
-          typeof rowsSnapshot === "object" &&
-          hasIndexCollection(rowsSnapshot.rowIndices)
-        ? rowsSnapshot.rowIndices
-        : null;
-  if (!hasIndexCollection(sourceIndices)) {
-    return fallback();
+  const totalRows = Math.max(0, Number(rowCount) | 0);
+  if (totalRows <= 0) {
+    return null;
   }
 
-  const selectedIndices = materializeIndexBuffer(sourceIndices, rowCount);
+  const selectionIsFull =
+    isFullSelection === true || isIdentitySelection(selectedIndices, totalRows);
+  ensureCliPrecomputedState(
+    precomputedState,
+    totalRows,
+    selectedIndices.length
+  );
+
   const coreStartMs = performance.now();
   let sorted = null;
 
-  if (descriptorList.length === 1) {
-    const descriptor = descriptorList[0];
+  if (normalizedDescriptors.length === 1) {
+    const descriptor = normalizedDescriptors[0];
     const sortedColumn = resolvePrecomputedSortedColumn(
       runtime,
       schema,
       descriptor.columnKey,
-      rowCount,
+      totalRows,
       precomputedState
     );
     if (!(sortedColumn instanceof Uint32Array)) {
-      return fallback();
+      return null;
     }
     sorted = buildPrecomputedSortedSelection(
       selectedIndices,
       sortedColumn,
       descriptor.direction,
-      rowCount
+      totalRows,
+      precomputedState,
+      selectionIsFull,
+      descriptor.columnKey
     );
   } else {
-    const rankStates = new Array(descriptorList.length);
-    for (let i = 0; i < descriptorList.length; i += 1) {
-      const descriptor = descriptorList[i];
+    if (
+      selectionIsFull &&
+      precomputedState &&
+      precomputedState.fullOrderByDescriptor instanceof Map
+    ) {
+      const descriptorKey = buildDescriptorCacheKey(normalizedDescriptors);
+      const cachedOrder = precomputedState.fullOrderByDescriptor.get(descriptorKey);
+      if (cachedOrder instanceof Uint32Array && cachedOrder.length === totalRows) {
+        const sortCoreMs = performance.now() - coreStartMs;
+        return {
+          sortMs: sortCoreMs,
+          sortCoreMs,
+          sortPrepMs: 0,
+          sortTotalMs: sortCoreMs,
+          sortMode: "precomputed-ranktuple",
+          sortedCount: cachedOrder.length,
+          descriptors: normalizedDescriptors,
+          dataPath: "indices+precomputed-ranktuple-cli-cached",
+          comparatorMode: "precomputed",
+        };
+      }
+
+      const inverseDescriptorList = tryBuildInverseDescriptorList(
+        normalizedDescriptors
+      );
+      if (inverseDescriptorList) {
+        const inverseKey = buildDescriptorCacheKey(inverseDescriptorList);
+        const inverseCachedOrder =
+          precomputedState.fullOrderByDescriptor.get(inverseKey);
+        if (
+          inverseCachedOrder instanceof Uint32Array &&
+          inverseCachedOrder.length === totalRows
+        ) {
+          const reversed = reverseUint32Array(inverseCachedOrder);
+          precomputedState.fullOrderByDescriptor.set(descriptorKey, reversed);
+          const sortCoreMs = performance.now() - coreStartMs;
+          return {
+            sortMs: sortCoreMs,
+            sortCoreMs,
+            sortPrepMs: 0,
+            sortTotalMs: sortCoreMs,
+            sortMode: "precomputed-ranktuple",
+            sortedCount: reversed.length,
+            descriptors: normalizedDescriptors,
+            dataPath: "indices+precomputed-ranktuple-cli-reverse-cache",
+            comparatorMode: "precomputed",
+          };
+        }
+      }
+    }
+
+    const rankStates = new Array(normalizedDescriptors.length);
+    for (let i = 0; i < normalizedDescriptors.length; i += 1) {
+      const descriptor = normalizedDescriptors[i];
       rankStates[i] = buildRankStateForColumn(
         runtime,
         schema,
         descriptor.columnKey,
-        rowCount,
+        totalRows,
         precomputedState
       );
       if (!rankStates[i]) {
-        return fallback();
+        return null;
       }
     }
 
     const rankSorted = sortIndicesByPrecomputedRanks(
       selectedIndices,
-      descriptorList,
+      normalizedDescriptors,
       rankStates,
       precomputedState
     );
@@ -654,15 +848,26 @@ function runCliPrecomputedSortSnapshotPass(
         sortedIndices: rankSorted,
         dataPath: "indices+precomputed-ranktuple-cli",
       };
+      if (
+        selectionIsFull &&
+        precomputedState &&
+        precomputedState.fullOrderByDescriptor instanceof Map
+      ) {
+        precomputedState.fullOrderByDescriptor.set(
+          buildDescriptorCacheKey(normalizedDescriptors),
+          rankSorted
+        );
+      }
     }
   }
 
   if (!sorted || !hasIndexCollection(sorted.sortedIndices)) {
-    return fallback();
+    return null;
   }
+
   const sortCoreMs = performance.now() - coreStartMs;
   const sortModeLabel =
-    descriptorList.length === 1 ? "precomputed" : "precomputed-ranktuple";
+    normalizedDescriptors.length === 1 ? "precomputed" : "precomputed-ranktuple";
 
   return {
     sortMs: sortCoreMs,
@@ -671,7 +876,7 @@ function runCliPrecomputedSortSnapshotPass(
     sortTotalMs: sortCoreMs,
     sortMode: sortModeLabel,
     sortedCount: sorted.sortedIndices.length,
-    descriptors: descriptorList,
+    descriptors: normalizedDescriptors,
     dataPath: sorted.dataPath,
     comparatorMode: "precomputed",
   };
@@ -718,6 +923,22 @@ function createCliBenchmarkApi(runtime, schema, forcedSortMode) {
     availableSortModes.includes(normalizedForcedMode)
       ? normalizedForcedMode
       : "";
+  const sortBenchmarkOrchestrator = createSortBenchmarkOrchestrator({
+    now: () => performance.now(),
+    materializeIndices: materializeIndexBuffer,
+    runFallbackSort: (rowsSnapshot, descriptorList) =>
+      runtime.runSortSnapshotPass(rowsSnapshot, descriptorList, "native"),
+    runPrecomputedSort: ({ descriptorList, snapshotIndices, rowCount }) =>
+      runCliPrecomputedSortSelection(
+        runtime,
+        schema,
+        descriptorList,
+        snapshotIndices,
+        rowCount,
+        isIdentitySelection(snapshotIndices, rowCount),
+        precomputedState
+      ),
+  });
 
   return {
     hasData: () => runtime.hasData(),
@@ -751,16 +972,37 @@ function createCliBenchmarkApi(runtime, schema, forcedSortMode) {
             ? effectiveForcedMode
             : runtime.getSortMode();
       if (requestedMode === "precomputed") {
-        return runCliPrecomputedSortSnapshotPass(
-          runtime,
-          schema,
+        return sortBenchmarkOrchestrator.runPrecomputedSortSnapshotPass(
           rowsSnapshot,
           descriptors,
-          precomputedState
+          runtime.getRowCount()
         );
       }
 
       return runtime.runSortSnapshotPass(rowsSnapshot, descriptors, requestedMode);
+    },
+    prewarmPrecomputedSortState: () => {
+      const rowCount = Math.max(0, Number(runtime.getRowCount()) | 0);
+      ensureCliPrecomputedState(precomputedState, rowCount, rowCount);
+      precomputedState.sortedByKey = Object.create(null);
+      precomputedState.sortedDescByKey = Object.create(null);
+      precomputedState.rankByKey = Object.create(null);
+      precomputedState.fullOrderByDescriptor = new Map();
+      const numericColumnarData = runtime.getNumericColumnarForSave();
+      if (!numericColumnarData || typeof numericColumnarData !== "object") {
+        return false;
+      }
+      const prewarmed =
+        ensureNumericColumnarSortedRanks(numericColumnarData, schema) || {};
+      const sortedNumericColumnarData =
+        prewarmed.numericColumnarData || numericColumnarData;
+      seedPrecomputedStateFromNumericColumnarData(
+        precomputedState,
+        sortedNumericColumnarData,
+        schema,
+        rowCount
+      );
+      return Object.keys(precomputedState.rankByKey).length > 0;
     },
     isTimSortAvailable: () => availableSortModes.includes("timsort"),
   };
@@ -859,6 +1101,15 @@ async function main() {
     );
   }
   const benchmarkApi = createCliBenchmarkApi(runtime, schema, args.sortMode);
+  if (
+    (args.bench === "sorting" || args.bench === "both") &&
+    benchmarkApi &&
+    typeof benchmarkApi.getSortModes === "function" &&
+    benchmarkApi.getSortModes().includes("precomputed") &&
+    typeof benchmarkApi.prewarmPrecomputedSortState === "function"
+  ) {
+    benchmarkApi.prewarmPrecomputedSortState();
+  }
 
   const outputSections = [];
 

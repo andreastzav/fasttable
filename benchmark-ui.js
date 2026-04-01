@@ -36,6 +36,23 @@ function renderBenchmarkLines(statusEl, lines) {
   statusEl.innerHTML = source.join("<br>");
 }
 
+function formatPrefixedBenchmarkLines(lines, linePrefix) {
+  const source = Array.isArray(lines) ? lines : [];
+  const prefix =
+    typeof linePrefix === "string" && linePrefix.trim() !== ""
+      ? `[${linePrefix.trim()}] `
+      : "";
+  if (prefix === "") {
+    return source;
+  }
+
+  const out = new Array(source.length);
+  for (let i = 0; i < source.length; i += 1) {
+    out[i] = `${prefix}${String(source[i])}`;
+  }
+  return out;
+}
+
 function formatBenchmarkError(error) {
   return String(error && error.message ? error.message : error);
 }
@@ -46,6 +63,8 @@ function bindBenchmarkUi(options) {
   const currentBtnEl = input.currentBtnEl || null;
   const statusEl = input.statusEl || null;
   const runBenchmark = input.runBenchmark;
+  const linePrefix =
+    typeof input.linePrefix === "string" ? input.linePrefix : "";
   const emptyMessage =
     typeof input.emptyMessage === "string" && input.emptyMessage.trim() !== ""
       ? input.emptyMessage
@@ -71,7 +90,10 @@ function bindBenchmarkUi(options) {
         delayTick: delayBenchmarkTick,
         now: () => performance.now(),
         onUpdate(lines) {
-          renderBenchmarkLines(statusEl, lines);
+          renderBenchmarkLines(
+            statusEl,
+            formatPrefixedBenchmarkLines(lines, linePrefix)
+          );
         },
       });
 

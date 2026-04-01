@@ -41,7 +41,9 @@
     "./engine": "./dist/engine.js",
     "./runtime": "./dist/runtime.js",
     "./filtering": "./dist/filtering.js",
+    "./filtering-orchestration": "./dist/filtering-orchestration.js",
     "./sorting": "./dist/sorting.js",
+    "./sorting-orchestration": "./dist/sorting-orchestration.js",
     "./benchmark": "./dist/benchmark.js",
     "./io": "./dist/io.js",
     "./io-adapter": {

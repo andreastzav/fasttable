@@ -17,6 +17,7 @@ import {
   buildDictionaryKeySearchPrefilter,
   precomputeDictionaryKeySearchState,
 } from "./filtering.js";
+import { createFilteringOrchestrator } from "./filtering-orchestration.js";
 import { createSortController, getAvailableSortModes } from "./sorting.js";
 import {
   convertNumericColumnarDataToObjectRows,
@@ -315,6 +316,15 @@ function createFastTableRuntime(options) {
       cacheOffset: NUMERIC_CACHE_OFFSET,
     }
   );
+  const filteringOrchestrator = createFilteringOrchestrator({
+    now,
+    getLoadedRowCount: () => getRowCount(),
+    getCurrentFilterModeKey,
+    buildDictionaryKeySearchPlan,
+    buildFilterResultFromCachedEntry,
+    syncActiveControllerIndices,
+    applyFilterPath,
+  });
 
   function getSchema() {
     return {
@@ -670,6 +680,7 @@ function createFastTableRuntime(options) {
     objectColumnarData = null;
     numericRowsData = null;
     numericColumnarData = null;
+    filteringOrchestrator.bumpTopLevelFilterCacheRevision();
     clearCurrentFilterState();
 
     if (objectRows.length > 0) {
@@ -691,6 +702,7 @@ function createFastTableRuntime(options) {
     objectRows = [];
     objectColumnarData = null;
     numericRowsData = null;
+    filteringOrchestrator.bumpTopLevelFilterCacheRevision();
     clearCurrentFilterState();
 
     if (isValidNumericColumnarData(numericColumnarData)) {
@@ -754,6 +766,21 @@ function createFastTableRuntime(options) {
     return {};
   }
 
+  function getCurrentFilterModeKey() {
+    if (modeOptions.useColumnarData) {
+      if (modeOptions.useBinaryColumnar) {
+        return "binary-columnar";
+      }
+      return "object-columnar";
+    }
+
+    if (modeOptions.useNumericData) {
+      return "numeric-row";
+    }
+
+    return "object-row";
+  }
+
   function getActiveController() {
     if (modeOptions.useColumnarData) {
       if (modeOptions.useBinaryColumnar) {
@@ -786,6 +813,83 @@ function createFastTableRuntime(options) {
     };
   }
 
+  function buildFilterResult(modePath, filteredIndices, filteredCount) {
+    const result = {
+      modePath,
+      filteredCount: Math.max(0, Number(filteredCount) || 0),
+      filteredIndices,
+    };
+
+    if (modePath === "numeric-columnar") {
+      result.columnarData = numericColumnarFilterController.getData();
+    } else if (modePath === "object-columnar") {
+      result.columnarData = objectColumnarFilterController.getData();
+    } else if (modePath === "numeric-rows") {
+      result.numericData = numericRowFilterController.getData();
+    } else {
+      result.rows = ensureObjectRows();
+    }
+
+    return result;
+  }
+
+  function buildFilterResultFromCachedEntry(cachedEntry) {
+    if (!cachedEntry || typeof cachedEntry !== "object") {
+      return null;
+    }
+
+    const active = getActiveController();
+    return buildFilterResult(
+      active.path,
+      cachedEntry.filteredIndices === undefined ? null : cachedEntry.filteredIndices,
+      cachedEntry.filteredCount
+    );
+  }
+
+  function syncActiveControllerIndices(filteredIndices) {
+    objectRowFilterController.setCurrentIndices(filteredIndices);
+    objectColumnarFilterController.setCurrentIndices(filteredIndices);
+    numericRowFilterController.setCurrentIndices(filteredIndices);
+    numericColumnarFilterController.setCurrentIndices(filteredIndices);
+  }
+
+  function applyFilterPath(effectiveRawFilters, filterOptions, baseIndices) {
+    const active = getActiveController();
+    const controllerOptions = {
+      enableCaching: filterOptions && filterOptions.enableCaching === true,
+      useSmarterPlanner: filterOptions && filterOptions.useSmarterPlanner === true,
+    };
+    if (baseIndices !== undefined) {
+      controllerOptions.baseIndices = baseIndices;
+    }
+    const filteredIndices = active.controller.apply(
+      effectiveRawFilters,
+      controllerOptions
+    );
+    const filteredCount = active.controller.getCurrentCount();
+    return buildFilterResult(active.path, filteredIndices, filteredCount);
+  }
+
+  function buildDictionaryKeySearchPlan(rawFilters, filterOptions) {
+    const active = getActiveController();
+    if (
+      !filterOptions ||
+      filterOptions.useDictionaryKeySearch !== true ||
+      (active.path !== "numeric-columnar" && active.path !== "numeric-rows")
+    ) {
+      return null;
+    }
+
+    const numericData = ensureNumericColumnarData();
+    return buildDictionaryKeySearchPrefilter(rawFilters, numericData, {
+      useDictionaryKeySearch: true,
+      useDictionaryIntersection:
+        filterOptions.useDictionaryIntersection === true,
+      useSmarterPlanner: filterOptions.useSmarterPlanner === true,
+      keyToIndex: COLUMN_INDEX_BY_KEY,
+    });
+  }
+
   function runFilterPassWithRawFilters(nextRawFilters, options) {
     if (!hasData()) {
       lastFilterResult = null;
@@ -794,56 +898,50 @@ function createFastTableRuntime(options) {
 
     const executionOptions = options || {};
     const sourceRawFilters = normalizeRawFilters(nextRawFilters);
-    const startMs = now();
-    const active = getActiveController();
-    const controllerOptions = {
+    const filterOptions = {
       enableCaching: modeOptions.enableCaching === true,
+      useDictionaryKeySearch: modeOptions.useDictionaryKeySearch === true,
+      useDictionaryIntersection: modeOptions.useDictionaryIntersection === true,
       useSmarterPlanner: modeOptions.useSmarterPlanner === true,
+      useSmartFiltering: modeOptions.useSmartFiltering === true,
+      useFilterCache: modeOptions.useFilterCache === true,
     };
-    let effectiveRawFilters = sourceRawFilters;
-    let dictionaryPrefilter = null;
-
-    if (
-      modeOptions.useDictionaryKeySearch === true &&
-      (active.path === "numeric-columnar" || active.path === "numeric-rows")
-    ) {
-      const numericData = ensureNumericColumnarData();
-      dictionaryPrefilter = buildDictionaryKeySearchPrefilter(
-        sourceRawFilters,
-        numericData,
-        {
-          useDictionaryKeySearch: true,
-          useDictionaryIntersection: modeOptions.useDictionaryIntersection === true,
-          useSmarterPlanner: modeOptions.useSmarterPlanner === true,
-          keyToIndex: COLUMN_INDEX_BY_KEY,
-        }
-      );
-      if (dictionaryPrefilter && dictionaryPrefilter.used) {
-        effectiveRawFilters =
-          dictionaryPrefilter.remainingRawFilters || {};
-        controllerOptions.baseIndices = dictionaryPrefilter.baseIndices || null;
+    const orchestration = filteringOrchestrator.runFilterPass(sourceRawFilters, {
+      filterOptions,
+    });
+    const filterResult = orchestration ? orchestration.filterResult : null;
+    if (!filterResult) {
+      if (executionOptions.updateState !== false) {
+        lastFilterResult = null;
       }
+      return null;
     }
-
-    const filteredIndices = active.controller.apply(
-      effectiveRawFilters,
-      controllerOptions
-    );
-    const filteredCount = active.controller.getCurrentCount();
-    const coreMs = now() - startMs;
-    const totalMs =
-      coreMs +
-      (dictionaryPrefilter && Number.isFinite(dictionaryPrefilter.durationMs)
-        ? dictionaryPrefilter.durationMs
-        : 0);
     const result = {
-      modePath: active.path,
-      filteredCount,
-      filteredIndices,
-      coreMs,
-      totalMs,
-      dictionaryPrefilter,
+      modePath: filterResult.modePath,
+      filteredCount: filterResult.filteredCount,
+      filteredIndices: filterResult.filteredIndices,
+      coreMs:
+        orchestration && Number.isFinite(orchestration.coreMs)
+          ? orchestration.coreMs
+          : 0,
+      totalMs:
+        orchestration && Number.isFinite(orchestration.coreMs)
+          ? orchestration.coreMs
+          : 0,
+      dictionaryPrefilter:
+        orchestration && orchestration.dictionaryKeySearchPlan
+          ? orchestration.dictionaryKeySearchPlan
+          : null,
     };
+    if (filterResult.columnarData !== undefined) {
+      result.columnarData = filterResult.columnarData;
+    }
+    if (filterResult.numericData !== undefined) {
+      result.numericData = filterResult.numericData;
+    }
+    if (filterResult.rows !== undefined) {
+      result.rows = filterResult.rows;
+    }
 
     if (executionOptions.updateState !== false) {
       lastFilterResult = result;

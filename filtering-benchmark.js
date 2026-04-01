@@ -14,6 +14,7 @@ import { bindBenchmarkUi } from "./benchmark-ui.js";
     primaryBtnEl: benchmarkBtnEl,
     currentBtnEl: benchmarkCurrentBtnEl,
     statusEl: benchmarkStatusEl,
+    linePrefix: "filter",
     emptyMessage: "Benchmark API not available.",
     runBenchmark({ api, currentOnly, delayTick, now, onUpdate }) {
       return runFilteringBenchmark({
