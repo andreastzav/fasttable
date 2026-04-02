@@ -1090,10 +1090,6 @@ function runSortFromCurrentUi(options) {
   );
 }
 
-function applySortAndRender(options) {
-  return runSortFromCurrentUi(options);
-}
-
 function runSortInteraction(action, options) {
   if (typeof action !== "function") {
     return;
@@ -2662,20 +2658,11 @@ function renderFilterUi(coreRun) {
   return output;
 }
 
-function runFiltersWithRawFilters(rawFilters, options) {
-  const coreRun = runFilterCore(rawFilters, options);
-  return renderFilterUi(coreRun);
-}
-
 function runFilterFromCurrentUi(options) {
   const executionOptions = options || {};
   const rawFilters = executionOptions.rawFilters || readRawFilters();
   const coreRun = runFilterCore(rawFilters, executionOptions);
   return renderFilterUi(coreRun);
-}
-
-function applyFiltersAndRender(options) {
-  return runFilterFromCurrentUi(options);
 }
 
 function attachFilterListeners() {
@@ -3128,7 +3115,7 @@ fastTableEngine = createFastTableEngine({
     setRawFilters: setRawFiltersUI,
     setSingleFilter: setSingleFilterUI,
     clearFilters: clearFiltersUI,
-    runFilterPass: (options) => applyFiltersAndRender(options),
+    runFilterPass: (options) => runFilterFromCurrentUi(options),
     runSingleFilterPass: (columnKey, value, options) =>
       filterRuntimeBridge.runSingleFilterPass(columnKey, value, options),
     runFilterPassWithRawFilters(rawFilters, options) {
