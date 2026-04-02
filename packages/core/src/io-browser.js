@@ -142,8 +142,10 @@ async function readUrlAsArrayBuffer(url, onProgress, fetchImpl) {
   }
 
   const reader = response.body.getReader();
-  const chunks = [];
   let receivedBytes = 0;
+  let output =
+    totalBytes > 0 ? new Uint8Array(totalBytes) : null;
+  const chunks = output ? null : [];
 
   while (true) {
     const next = await reader.read();
@@ -153,7 +155,22 @@ async function readUrlAsArrayBuffer(url, onProgress, fetchImpl) {
 
     const chunk = next.value;
     if (chunk && chunk.byteLength > 0) {
-      chunks.push(chunk);
+      if (output) {
+        const requiredLength = receivedBytes + chunk.byteLength;
+        if (requiredLength > output.length) {
+          const grownLength = Math.max(
+            requiredLength,
+            output.length * 2,
+            64 * 1024
+          );
+          const grownOutput = new Uint8Array(grownLength);
+          grownOutput.set(output.subarray(0, receivedBytes), 0);
+          output = grownOutput;
+        }
+        output.set(chunk, receivedBytes);
+      } else {
+        chunks.push(chunk);
+      }
       receivedBytes += chunk.byteLength;
       if (progressCallback) {
         progressCallback(receivedBytes, totalBytes);
@@ -161,19 +178,25 @@ async function readUrlAsArrayBuffer(url, onProgress, fetchImpl) {
     }
   }
 
-  const output = new Uint8Array(receivedBytes);
-  let writeOffset = 0;
-  for (let i = 0; i < chunks.length; i += 1) {
-    const chunk = chunks[i];
-    output.set(chunk, writeOffset);
-    writeOffset += chunk.byteLength;
+  if (!output) {
+    output = new Uint8Array(receivedBytes);
+    let writeOffset = 0;
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      output.set(chunk, writeOffset);
+      writeOffset += chunk.byteLength;
+    }
   }
 
   if (progressCallback) {
     progressCallback(receivedBytes, totalBytes > 0 ? totalBytes : receivedBytes);
   }
 
-  return output.buffer;
+  if (receivedBytes === output.length) {
+    return output.buffer;
+  }
+
+  return output.buffer.slice(0, receivedBytes);
 }
 
 export {
