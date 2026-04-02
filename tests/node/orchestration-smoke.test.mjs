@@ -6,6 +6,8 @@ let srcFilteringOrchestration;
 let distFilteringOrchestration;
 let srcSortingOrchestration;
 let distSortingOrchestration;
+let srcSortBenchmarkRuntimeBridge;
+let distSortBenchmarkRuntimeBridge;
 
 before(async () => {
   ensureCoreDistBuilt();
@@ -21,6 +23,12 @@ before(async () => {
   );
   distSortingOrchestration = await import(
     "../../packages/core/dist/sorting-orchestration.js"
+  );
+  srcSortBenchmarkRuntimeBridge = await import(
+    "../../packages/core/src/sort-benchmark-runtime.js"
+  );
+  distSortBenchmarkRuntimeBridge = await import(
+    "../../packages/core/dist/sort-benchmark-runtime.js"
   );
 });
 
@@ -41,6 +49,14 @@ test("orchestration modules export expected factories in src and dist", () => {
     typeof distSortingOrchestration.createSortBenchmarkOrchestrator,
     "function"
   );
+  assert.equal(
+    typeof srcSortBenchmarkRuntimeBridge.createSortBenchmarkRuntimeBridge,
+    "function"
+  );
+  assert.equal(
+    typeof distSortBenchmarkRuntimeBridge.createSortBenchmarkRuntimeBridge,
+    "function"
+  );
 });
 
 test("sorting orchestrator fallback path works", () => {
@@ -53,4 +69,3 @@ test("sorting orchestrator fallback path works", () => {
   const result = src.runPrecomputedSortSnapshotPass([], [], 0);
   assert.equal(result, srcFallbackResult);
 });
-

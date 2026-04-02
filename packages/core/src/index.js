@@ -6,5 +6,6 @@ export * from "./filtering.js";
 export * from "./filtering-orchestration.js";
 export * from "./sorting.js";
 export * from "./sorting-orchestration.js";
+export * from "./sort-benchmark-runtime.js";
 export * from "./io.js";
 export * from "./benchmark.js";

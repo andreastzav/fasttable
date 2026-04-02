@@ -24,6 +24,11 @@ before(async () => {
 test("benchmark smoke works against src runtime", async () => {
   const runtime = srcRuntime.createFastTableRuntime();
   runtime.generate(5000);
+  const sortSnapshot = runtime.buildSortRowsSnapshot({});
+  assert.ok(sortSnapshot && typeof sortSnapshot === "object");
+  assert.equal(sortSnapshot.snapshotType, "row-indices-v2");
+  assert.ok(ArrayBuffer.isView(sortSnapshot.rowIndices));
+  assert.equal(sortSnapshot.count, sortSnapshot.rowIndices.length);
 
   const availableSortModes = sortingApi.getAvailableSortModes();
   assert.deepEqual(runtime.getSortModes(), availableSortModes);

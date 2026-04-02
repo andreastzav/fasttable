@@ -130,18 +130,43 @@ function hasIndexCollection(indices) {
   return Array.isArray(indices) || ArrayBuffer.isView(indices);
 }
 
-function buildPrecomputedSortKeyColumns(
+function buildPrecomputedSortKeyColumnsFromNumericData(
+  numericData,
   indices,
-  rowsByIndex,
   descriptors,
   columnTypeByKey
 ) {
+  if (!numericData || !Array.isArray(numericData.columns)) {
+    return null;
+  }
+
   const descriptorList = Array.isArray(descriptors) ? descriptors : [];
   const keyColumns = new Array(descriptorList.length);
+  const columns = numericData.columns;
+  const dictionaries = Array.isArray(numericData.dictionaries)
+    ? numericData.dictionaries
+    : [];
 
   for (let d = 0; d < descriptorList.length; d += 1) {
     const descriptor = descriptorList[d];
-    const columnKey = descriptor && descriptor.columnKey;
+    const columnKey =
+      descriptor && typeof descriptor.columnKey === "string"
+        ? descriptor.columnKey
+        : "";
+    const columnIndex = Number(COLUMN_INDEX_BY_KEY[columnKey]);
+    if (
+      !Number.isInteger(columnIndex) ||
+      columnIndex < 0 ||
+      columnIndex >= columns.length
+    ) {
+      return null;
+    }
+
+    const columnValues = columns[columnIndex];
+    if (!columnValues || typeof columnValues.length !== "number") {
+      return null;
+    }
+
     const valueType =
       columnTypeByKey && typeof columnKey === "string"
         ? columnTypeByKey[columnKey]
@@ -150,11 +175,13 @@ function buildPrecomputedSortKeyColumns(
     const values = useNumericValues
       ? new Float64Array(indices.length)
       : new Array(indices.length);
+    const dictionary = Array.isArray(dictionaries[columnIndex])
+      ? dictionaries[columnIndex]
+      : null;
 
     for (let i = 0; i < indices.length; i += 1) {
-      const rowIndex = indices[i];
-      const row = rowsByIndex[rowIndex];
-      const rawValue = row && columnKey ? row[columnKey] : undefined;
+      const rowIndex = Number(indices[i]) >>> 0;
+      const rawValue = columnValues[rowIndex];
       if (useNumericValues) {
         if (rawValue === undefined || rawValue === null) {
           values[i] = Number.NaN;
@@ -162,6 +189,8 @@ function buildPrecomputedSortKeyColumns(
           const numericValue = Number(rawValue);
           values[i] = Number.isFinite(numericValue) ? numericValue : Number.NaN;
         }
+      } else if (dictionary) {
+        values[i] = dictionary[rawValue];
       } else {
         values[i] = rawValue;
       }
@@ -173,18 +202,37 @@ function buildPrecomputedSortKeyColumns(
   return keyColumns;
 }
 
-function isValidRowIndexCollection(indices, expectedLength, maxRowCount) {
-  if (!Array.isArray(indices) && !ArrayBuffer.isView(indices)) {
+function normalizeRuntimeSortDescriptorList(descriptors) {
+  const normalized = normalizeSortDescriptorList(descriptors);
+  const filtered = [];
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const descriptor = normalized[i];
+    const columnKey = descriptor && descriptor.columnKey;
+    if (
+      typeof columnKey === "string" &&
+      Object.prototype.hasOwnProperty.call(COLUMN_INDEX_BY_KEY, columnKey)
+    ) {
+      filtered.push(descriptor);
+    }
+  }
+
+  if (filtered.length > 0) {
+    return filtered;
+  }
+
+  return [{ columnKey: "index", direction: "asc" }];
+}
+
+function isValidSnapshotIndices(indices, maxRowCount) {
+  if (!hasIndexCollection(indices)) {
     return false;
   }
 
-  if (indices.length !== expectedLength) {
-    return false;
-  }
-
+  const rowCount = Math.max(0, Number(maxRowCount) | 0);
   for (let i = 0; i < indices.length; i += 1) {
     const value = Number(indices[i]);
-    if (!Number.isInteger(value) || value < 0 || value >= maxRowCount) {
+    if (!Number.isInteger(value) || value < 0 || value >= rowCount) {
       return false;
     }
   }
@@ -192,27 +240,17 @@ function isValidRowIndexCollection(indices, expectedLength, maxRowCount) {
   return true;
 }
 
-function deriveRowIndicesFromRowsByIndexColumn(rows, maxRowCount) {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return [];
+function getSnapshotCountHint(snapshot) {
+  if (
+    snapshot &&
+    typeof snapshot === "object" &&
+    Number.isFinite(snapshot.count) &&
+    Number(snapshot.count) >= 0
+  ) {
+    return Math.floor(Number(snapshot.count));
   }
 
-  const out = new Array(rows.length);
-  for (let i = 0; i < rows.length; i += 1) {
-    const row = rows[i];
-    const indexValue =
-      row && row.index !== undefined && row.index !== null
-        ? Number(row.index)
-        : Number.NaN;
-    const rowIndex = indexValue - 1;
-    if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= maxRowCount) {
-      return null;
-    }
-
-    out[i] = rowIndex;
-  }
-
-  return out;
+  return null;
 }
 
 function buildRankArrayFromSortedIndices(sortedIndices, rowCount) {
@@ -473,39 +511,44 @@ function createFastTableRuntime(options) {
     return numericColumnarData;
   }
 
-  function resolveSnapshotRows(source) {
-    if (Array.isArray(source)) {
-      return source;
+  function resolveSnapshotRowIndices(source, totalRows) {
+    const maxRows = Math.max(0, Number(totalRows) | 0);
+    const snapshot =
+      source && typeof source === "object" ? source : null;
+    const directCandidate =
+      snapshot && hasIndexCollection(snapshot.rowIndices)
+        ? snapshot.rowIndices
+        : snapshot && hasIndexCollection(snapshot.indices)
+          ? snapshot.indices
+          : null;
+
+    if (isValidSnapshotIndices(directCandidate, maxRows)) {
+      return {
+        rowIndices: materializeFilteredIndices(directCandidate, maxRows),
+        count: directCandidate.length | 0,
+      };
     }
 
-    if (source && typeof source === "object" && Array.isArray(source.rows)) {
-      return source.rows;
+    const countHint = getSnapshotCountHint(snapshot);
+    if (Number.isInteger(countHint) && countHint >= 0 && countHint <= maxRows) {
+      const out = new Uint32Array(countHint);
+      for (let i = 0; i < countHint; i += 1) {
+        out[i] = i;
+      }
+      return {
+        rowIndices: out,
+        count: countHint,
+      };
     }
 
-    return [];
-  }
-
-  function resolveSnapshotRowIndices(source, rows, totalRows) {
-    const rowCount = Array.isArray(rows) ? rows.length : 0;
-    const container =
-      source && typeof source === "object" && !Array.isArray(source)
-        ? source
-        : null;
-    const directCandidate = hasIndexCollection(rows.__rowIndices)
-      ? rows.__rowIndices
-      : container && hasIndexCollection(container.rowIndices)
-        ? container.rowIndices
-        : null;
-    if (isValidRowIndexCollection(directCandidate, rowCount, totalRows)) {
-      return directCandidate.slice();
+    const fallback = new Uint32Array(maxRows);
+    for (let i = 0; i < maxRows; i += 1) {
+      fallback[i] = i;
     }
-
-    const derived = deriveRowIndicesFromRowsByIndexColumn(rows, totalRows);
-    if (isValidRowIndexCollection(derived, rowCount, totalRows)) {
-      return derived;
-    }
-
-    return null;
+    return {
+      rowIndices: fallback,
+      count: maxRows,
+    };
   }
 
   function resolvePrecomputedRankColumnsForDescriptors(
@@ -1002,37 +1045,22 @@ function createFastTableRuntime(options) {
         ? nextRawFilters
         : rawFilters;
     const filterResult = runFilterPassWithRawFilters(raw, { updateState: false });
-    const rows = ensureObjectRows();
+    const rowCount = getRowCount();
     const indices = materializeFilteredIndices(
       filterResult ? filterResult.filteredIndices : null,
-      rows.length
+      rowCount
     );
-    const snapshotRows = new Array(indices.length);
-
-    Object.defineProperty(snapshotRows, "__rowIndices", {
-      value: indices,
-      enumerable: false,
-      configurable: true,
-      writable: true,
-    });
-    Object.defineProperty(snapshotRows, "__rowsMaterialized", {
-      value: false,
-      enumerable: false,
-      configurable: true,
-      writable: true,
-    });
 
     return {
-      rows: snapshotRows,
+      snapshotType: "row-indices-v2",
       rowIndices: indices,
-      count: snapshotRows.length,
+      count: indices.length,
       filterCoreMs: filterResult ? filterResult.coreMs : 0,
     };
   }
 
   function runSortSnapshotPass(rowsSnapshot, descriptors, sortModeOverride) {
-    const sourceRows = resolveSnapshotRows(rowsSnapshot);
-    const descriptorList = normalizeSortDescriptorList(descriptors);
+    const descriptorList = normalizeRuntimeSortDescriptorList(descriptors);
     const controller = createSortController({
       columnKeys: COLUMN_KEYS,
       defaultColumnKey: "index",
@@ -1053,104 +1081,46 @@ function createFastTableRuntime(options) {
         ? sortModeOverride
         : sortMode;
 
-    const allRows = ensureObjectRows();
-    const snapshotRowIndices = resolveSnapshotRowIndices(
-      rowsSnapshot,
-      sourceRows,
-      allRows.length
-    );
-    const snapshotCount = Array.isArray(sourceRows)
-      ? sourceRows.length
-      : hasIndexCollection(snapshotRowIndices)
-        ? snapshotRowIndices.length
-        : 0;
+    const totalRows = getRowCount();
+    const snapshot = resolveSnapshotRowIndices(rowsSnapshot, totalRows);
+    const snapshotRowIndices = snapshot.rowIndices;
+    const snapshotCount = snapshot.count;
     const sortTotalStartMs = now();
-    let rowsToSort = null;
-    let result = null;
-    if (sortOptions.useIndexSort) {
-      const activeDescriptors = controller.getSortDescriptors();
-      const canUseGlobalRowIndices =
-        hasIndexCollection(snapshotRowIndices) &&
-        snapshotRowIndices.length === snapshotCount &&
-        allRows.length > 0;
-      const indices = canUseGlobalRowIndices
-        ? snapshotRowIndices.slice()
-        : new Array(snapshotCount);
-      if (!canUseGlobalRowIndices) {
-        if (
-          Array.isArray(sourceRows) &&
-          sourceRows.__rowsMaterialized === false &&
-          hasIndexCollection(snapshotRowIndices) &&
-          snapshotRowIndices.length === snapshotCount
-        ) {
-          rowsToSort = new Array(snapshotCount);
-          for (let i = 0; i < snapshotCount; i += 1) {
-            rowsToSort[i] = allRows[snapshotRowIndices[i]];
-          }
-        } else {
-          rowsToSort = sourceRows.slice();
-        }
-
-        for (let i = 0; i < indices.length; i += 1) {
-          indices[i] = i;
-        }
-      }
-
-      const runSortOptions = { ...sortOptions };
-      const rowsByIndex = canUseGlobalRowIndices ? allRows : rowsToSort;
-      if (canUseGlobalRowIndices) {
-        const precomputedRankColumns = resolvePrecomputedRankColumnsForDescriptors(
-          activeDescriptors,
-          allRows.length
-        );
-        if (
-          Array.isArray(precomputedRankColumns) &&
-          precomputedRankColumns.length === activeDescriptors.length
-        ) {
-          runSortOptions.precomputedRankColumns = precomputedRankColumns;
-        }
-      } else {
-        runSortOptions.precomputedIndexKeys = buildPrecomputedSortKeyColumns(
-          indices,
-          rowsToSort,
-          activeDescriptors,
-          columnTypeByKey
-        );
-      }
-
-      result = controller.sortIndices(
-        indices,
-        rowsByIndex,
-        effectiveSortMode,
-        runSortOptions
-      );
+    const runtimeSortMode =
+      effectiveSortMode === "precomputed" ? "native" : effectiveSortMode;
+    const indices = snapshotRowIndices.slice();
+    const runSortOptions = { ...sortOptions, useIndexSort: true };
+    const precomputedRankColumns = resolvePrecomputedRankColumnsForDescriptors(
+      descriptorList,
+      totalRows
+    );
+    if (
+      Array.isArray(precomputedRankColumns) &&
+      precomputedRankColumns.length === descriptorList.length
+    ) {
+      runSortOptions.precomputedRankColumns = precomputedRankColumns;
     } else {
-      if (
-        Array.isArray(sourceRows) &&
-        sourceRows.__rowsMaterialized === false &&
-        hasIndexCollection(snapshotRowIndices) &&
-        snapshotRowIndices.length === snapshotCount
-      ) {
-        rowsToSort = new Array(snapshotCount);
-        for (let i = 0; i < snapshotCount; i += 1) {
-          rowsToSort[i] = allRows[snapshotRowIndices[i]];
-        }
-      } else {
-        rowsToSort = sourceRows.slice();
+      const keyColumns = buildPrecomputedSortKeyColumnsFromNumericData(
+        ensureNumericColumnarData(),
+        indices,
+        descriptorList,
+        columnTypeByKey
+      );
+      if (Array.isArray(keyColumns) && keyColumns.length === descriptorList.length) {
+        runSortOptions.precomputedIndexKeys = keyColumns;
       }
-
-      result = controller.sortRows(rowsToSort, effectiveSortMode, sortOptions);
     }
+
+    const result = controller.sortIndices(
+      indices,
+      null,
+      runtimeSortMode,
+      runSortOptions
+    );
     const sortTotalMs = now() - sortTotalStartMs;
     const sortCoreMs = Number(result.durationMs);
     const sortPrepMs = sortTotalMs - sortCoreMs;
-    const sortedCount = sortOptions.useIndexSort
-      ? hasIndexCollection(snapshotRowIndices)
-        ? snapshotRowIndices.length
-        : snapshotCount
-      : rowsToSort && typeof rowsToSort.length === "number"
-        ? rowsToSort.length
-        : snapshotCount;
+    const sortedCount = snapshotCount;
 
     return {
       sortMs: sortCoreMs,

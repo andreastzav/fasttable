@@ -44,6 +44,7 @@
     "./filtering-orchestration": "./dist/filtering-orchestration.js",
     "./sorting": "./dist/sorting.js",
     "./sorting-orchestration": "./dist/sorting-orchestration.js",
+    "./sort-benchmark-runtime": "./dist/sort-benchmark-runtime.js",
     "./benchmark": "./dist/benchmark.js",
     "./io": "./dist/io.js",
     "./io-adapter": {

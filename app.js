@@ -2,6 +2,7 @@ import { createFastTableEngine } from "@fasttable/core/engine";
 import { createFastTableRuntime } from "@fasttable/core/runtime";
 import { createFilteringOrchestrator } from "@fasttable/core/filtering-orchestration";
 import { createSortBenchmarkOrchestrator } from "@fasttable/core/sorting-orchestration";
+import { createSortBenchmarkRuntimeBridge } from "@fasttable/core/sort-benchmark-runtime";
 import {
   ensureNumericColumnarSortedIndices as ensureCoreNumericColumnarSortedIndices,
   ensureNumericColumnarSortedRanks as ensureCoreNumericColumnarSortedRanks,
@@ -218,6 +219,23 @@ const sortBenchmarkOrchestrator = createSortBenchmarkOrchestrator({
       snapshotCount,
       descriptorList,
       rowCount
+    ),
+});
+const sortBenchmarkRuntimeBridge = createSortBenchmarkRuntimeBridge({
+  runtime: benchmarkSortRuntime,
+  readRawFilters,
+  getRowCount: getLoadedRowCount,
+  getModeOptions,
+  getSortOptions: getSortRuntimeOptions,
+  getSortMode,
+  getNumericColumnarData: getNumericColumnarForSave,
+  getRowsForRuntime: ensureObjectRowsAvailable,
+  isValidNumericColumnarData,
+  runPrecomputedSortSnapshotPass: (rowsSnapshot, descriptors) =>
+    sortBenchmarkOrchestrator.runPrecomputedSortSnapshotPass(
+      rowsSnapshot,
+      descriptors,
+      getLoadedRowCount()
     ),
 });
 
@@ -963,62 +981,15 @@ function clearPrecomputedGroupedSortCache() {
   precomputedSubsetSortCache.sortedCount = 0;
 }
 
-function syncBenchmarkSortRuntime(rawFilters) {
-  const runtimeRawFilters =
-    rawFilters && typeof rawFilters === "object" ? rawFilters : readRawFilters();
-  const rowCount = getLoadedRowCount();
-
-  if (rowCount > 0) {
-    const numericColumnarData = getNumericColumnarForSave();
-    if (
-      numericColumnarData &&
-      isValidNumericColumnarData(numericColumnarData)
-    ) {
-      benchmarkSortRuntime.setDataFromNumericColumnar(numericColumnarData);
-    } else {
-      benchmarkSortRuntime.setDataFromRows(ensureObjectRowsAvailable());
-    }
-  } else {
-    benchmarkSortRuntime.setDataFromRows([]);
-  }
-
-  benchmarkSortRuntime.setModeOptions(getModeOptions());
-  benchmarkSortRuntime.setRawFilters(runtimeRawFilters);
-  benchmarkSortRuntime.setSortOptions(getSortRuntimeOptions());
-
-  const selectedSortMode = getSortMode();
-  if (selectedSortMode !== "precomputed") {
-    benchmarkSortRuntime.setSortMode(selectedSortMode);
-  }
-  return runtimeRawFilters;
-}
-
 function buildRowsSnapshotFromRawFilters(rawFilters) {
-  const runtimeRawFilters = syncBenchmarkSortRuntime(rawFilters);
-  return benchmarkSortRuntime.buildSortRowsSnapshot(runtimeRawFilters);
-}
-
-function runPrecomputedSortSnapshotBenchmarkPass(rowsSnapshot, descriptors) {
-  return sortBenchmarkOrchestrator.runPrecomputedSortSnapshotPass(
-    rowsSnapshot,
-    descriptors,
-    getLoadedRowCount()
-  );
+  return sortBenchmarkRuntimeBridge.buildSortRowsSnapshot(rawFilters);
 }
 
 function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-  const requestedSortMode =
-    typeof sortMode === "string" && sortMode.trim() !== ""
-      ? sortMode
-      : undefined;
-  if (requestedSortMode === "precomputed") {
-    return runPrecomputedSortSnapshotBenchmarkPass(rowsSnapshot, descriptors);
-  }
-
-  return benchmarkSortRuntime.runSortSnapshotPass(
+  return sortBenchmarkRuntimeBridge.runSortSnapshotPass(
     rowsSnapshot,
     descriptors,
-    requestedSortMode
+    sortMode
   );
 }
 
@@ -2030,13 +2001,36 @@ function hasIndexCollection(indices) {
   return Array.isArray(indices) || ArrayBuffer.isView(indices);
 }
 
-function buildPrecomputedSortKeyColumns(indices, rowsByIndex, descriptors) {
+function buildPrecomputedSortKeyColumns(indices, numericColumnarData, descriptors) {
+  if (
+    !numericColumnarData ||
+    !Array.isArray(numericColumnarData.columns) ||
+    numericColumnarData.columns.length < columnKeys.length
+  ) {
+    return null;
+  }
+
   const descriptorList = Array.isArray(descriptors) ? descriptors : [];
   const keyColumns = new Array(descriptorList.length);
+  const columns = numericColumnarData.columns;
+  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
+    ? numericColumnarData.dictionaries
+    : [];
 
   for (let d = 0; d < descriptorList.length; d += 1) {
     const descriptor = descriptorList[d];
-    const columnKey = descriptor && descriptor.columnKey;
+    const columnKey =
+      descriptor && typeof descriptor.columnKey === "string"
+        ? descriptor.columnKey
+        : "";
+    const columnIndex = Number(columnIndexByKey[columnKey]);
+    if (!Number.isInteger(columnIndex) || columnIndex < 0) {
+      return null;
+    }
+    const columnValues = columns[columnIndex];
+    if (!columnValues || typeof columnValues.length !== "number") {
+      return null;
+    }
     const valueType =
       sortColumnTypeByKey && typeof columnKey === "string"
         ? sortColumnTypeByKey[columnKey]
@@ -2047,9 +2041,8 @@ function buildPrecomputedSortKeyColumns(indices, rowsByIndex, descriptors) {
       : new Array(indices.length);
 
     for (let i = 0; i < indices.length; i += 1) {
-      const rowIndex = indices[i];
-      const row = rowsByIndex[rowIndex];
-      const rawValue = row && columnKey ? row[columnKey] : undefined;
+      const rowIndex = Number(indices[i]) >>> 0;
+      const rawValue = columnValues[rowIndex];
       if (useNumericValues) {
         if (rawValue === undefined || rawValue === null) {
           values[i] = Number.NaN;
@@ -2057,6 +2050,8 @@ function buildPrecomputedSortKeyColumns(indices, rowsByIndex, descriptors) {
           const numericValue = Number(rawValue);
           values[i] = Number.isFinite(numericValue) ? numericValue : Number.NaN;
         }
+      } else if (Array.isArray(dictionaries[columnIndex])) {
+        values[i] = dictionaries[columnIndex][rawValue];
       } else {
         values[i] = rawValue;
       }
@@ -4034,28 +4029,32 @@ function buildSortedIndicesViaRowSort(
 
 function buildSortedIndicesViaIndexSort(
   baseIndices,
-  sourceRows,
   sortOptions,
   activeDescriptors,
-  sortModeOverride
+  sortModeOverride,
+  rowCount
 ) {
   const sortedIndices = baseIndices.slice();
   const descriptorList = normalizeSortDescriptorList(activeDescriptors);
-  const sourceRowCount =
-    sourceRows && typeof sourceRows.length === "number" ? sourceRows.length : 0;
+  const sourceRowCount = Math.max(0, Number(rowCount) | 0);
   const precomputedRankColumns = buildPrecomputedSortRankColumns(
     descriptorList,
     sourceRowCount
   );
   const runSortOptions = Object.assign({}, sortOptions || {});
+  let sourceRows = null;
   if (Array.isArray(precomputedRankColumns)) {
     runSortOptions.precomputedRankColumns = precomputedRankColumns;
   } else {
+    const numericColumnarData = getNumericColumnarDataForPrecomputedSort();
     runSortOptions.precomputedIndexKeys = buildPrecomputedSortKeyColumns(
       sortedIndices,
-      sourceRows,
+      numericColumnarData,
       descriptorList
     );
+    if (!Array.isArray(runSortOptions.precomputedIndexKeys)) {
+      sourceRows = ensureObjectRowsAvailable();
+    }
   }
   const sortResult = sortController.sortIndices(
     sortedIndices,
@@ -4089,7 +4088,6 @@ function buildSortedIndicesForCurrentResult(filterResult, options) {
   const sortTotalStartMs = performance.now();
   const loadedRowCount = getLoadedRowCount();
 
-  let sourceRows = null;
   let sortedRun = null;
 
   if (selectedSortMode === "precomputed" || shouldPreferPrecomputedFastPath) {
@@ -4102,28 +4100,27 @@ function buildSortedIndicesForCurrentResult(filterResult, options) {
   }
 
   if (!sortedRun) {
-    sourceRows = ensureObjectRowsAvailable();
-    if (!Array.isArray(sourceRows) || sourceRows.length === 0) {
+    if (loadedRowCount <= 0) {
       return null;
     }
 
     const baseIndices = materializeFilteredIndexArray(
       filterResult.filteredIndices,
-      sourceRows.length
+      loadedRowCount
     );
     const effectiveSortMode =
       selectedSortMode === "precomputed" ? "native" : selectedSortMode;
     sortedRun = sortOptions.useIndexSort
       ? buildSortedIndicesViaIndexSort(
           baseIndices,
-          sourceRows,
           sortOptions,
           activeDescriptors,
-          effectiveSortMode
+          effectiveSortMode,
+          loadedRowCount
         )
       : buildSortedIndicesViaRowSort(
           baseIndices,
-          sourceRows,
+          ensureObjectRowsAvailable(),
           sortOptions,
           effectiveSortMode
         );

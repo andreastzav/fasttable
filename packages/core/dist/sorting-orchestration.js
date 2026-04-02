@@ -34,16 +34,24 @@ function normalizeSortDescriptorList(descriptors) {
 }
 
 function resolveSnapshotIndicesCandidate(rowsSnapshot) {
-  if (Array.isArray(rowsSnapshot) && hasIndexCollection(rowsSnapshot.__rowIndices)) {
-    return rowsSnapshot.__rowIndices;
-  }
-
   if (
     rowsSnapshot &&
     typeof rowsSnapshot === "object" &&
     hasIndexCollection(rowsSnapshot.rowIndices)
   ) {
     return rowsSnapshot.rowIndices;
+  }
+
+  if (
+    rowsSnapshot &&
+    typeof rowsSnapshot === "object" &&
+    hasIndexCollection(rowsSnapshot.indices)
+  ) {
+    return rowsSnapshot.indices;
+  }
+
+  if (hasIndexCollection(rowsSnapshot)) {
+    return rowsSnapshot;
   }
 
   return null;

@@ -17,6 +17,7 @@ Core ESM modules for FastTable generation, filtering, sorting, I/O, runtime orch
 - `@fasttable/core/generation`
 - `@fasttable/core/filtering`
 - `@fasttable/core/sorting`
+- `@fasttable/core/sort-benchmark-runtime`
 - `@fasttable/core/io`
 - `@fasttable/core/io-browser`
 - `@fasttable/core/io-node`

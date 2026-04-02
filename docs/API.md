@@ -13,6 +13,7 @@ Main source files in `packages/core/src`:
 - `filtering-orchestration.js`: shared filtering orchestration/cache layer for browser and CLI adapters.
 - `sorting.js`: sort controllers, typed comparators, index sorting.
 - `sorting-orchestration.js`: shared sort benchmark orchestration layer for browser and CLI adapters.
+- `sort-benchmark-runtime.js`: shared sort-benchmark runtime bridge used by thin browser/CLI adapters.
 - `io.js`: binary codec and format conversion utilities.
 - `io-browser.js`, `io-node.js`: browser/node I/O adapters.
 - `generation-worker-protocol.js`: shared worker message protocol.
@@ -47,6 +48,7 @@ Build output:
   - `@fasttable/core/filtering-orchestration`
   - `@fasttable/core/sorting`
   - `@fasttable/core/sorting-orchestration`
+  - `@fasttable/core/sort-benchmark-runtime`
 - `experimental`:
   - `@fasttable/core/engine`
   - `@fasttable/core/generation-worker-protocol`
@@ -79,6 +81,7 @@ Build output:
 - `@fasttable/core/filtering-orchestration`
 - `@fasttable/core/sorting`
 - `@fasttable/core/sorting-orchestration`
+- `@fasttable/core/sort-benchmark-runtime`
 - `@fasttable/core/io`
 - `@fasttable/core/io-adapter`
 - `@fasttable/core/io-browser`
@@ -134,7 +137,7 @@ Returned runtime object:
 - `setSortMode(mode) -> string`
 - `getSortOptions() -> { useTypedComparator, useIndexSort }`
 - `setSortOptions(options) -> { useTypedComparator, useIndexSort }`
-- `buildSortRowsSnapshot(rawFilters?) -> { rows, count, filterCoreMs }`
+- `buildSortRowsSnapshot(rawFilters?) -> { snapshotType, rowIndices, count, filterCoreMs }`
 - `runSortSnapshotPass(rowsSnapshot, descriptors, sortMode?) -> sortResult`
 - `getNumericColumnarForSave() -> numericColumnarData | null`
 
@@ -150,6 +153,14 @@ Current ownership semantics (important):
 Sort result shape:
 
 - `{ sortMs, sortCoreMs, sortPrepMs, sortTotalMs, sortMode, sortedCount, descriptors, dataPath, comparatorMode }`
+
+Sort snapshot contract:
+
+- Runtime snapshots are typed-index-first:
+  - `snapshotType: "row-indices-v2"`
+  - `rowIndices: Uint32Array` (or compatible index collection)
+  - `count: number`
+- `runSortSnapshotPass` accepts the above snapshot payload (and keeps legacy array-like support for compatibility).
 
 ## Benchmark API (`@fasttable/core/benchmark`)
 

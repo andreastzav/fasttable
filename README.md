@@ -174,6 +174,7 @@ Core package:
 - `packages/core/src/filtering-orchestration.js`: shared filtering orchestration/cache logic consumed by browser and CLI/runtime adapters.
 - `packages/core/src/sorting.js`: sort controllers and index/typed comparator paths.
 - `packages/core/src/sorting-orchestration.js`: shared sort benchmark orchestration consumed by browser and CLI adapters.
+- `packages/core/src/sort-benchmark-runtime.js`: shared bridge that syncs runtime state for sort benchmarks in browser/CLI adapters.
 - `packages/core/src/io.js`: binary codec (format encode/decode + conversion helpers).
 - `packages/core/src/io-browser.js`, `packages/core/src/io-node.js`: runtime-specific I/O adapters.
 - `packages/core/src/runtime.js`: headless runtime facade for dataset/filter/sort orchestration.

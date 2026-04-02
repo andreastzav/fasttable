@@ -577,12 +577,29 @@ async function runSortBenchmark(options) {
     // Sorting benchmark always runs on the full table snapshot.
     // Active UI filters are intentionally ignored here.
     const snapshot = api.buildSortRowsSnapshot({});
-    const snapshotRows =
-      snapshot && Array.isArray(snapshot.rows) ? snapshot.rows : [];
+    const snapshotPayload =
+      snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+        ? snapshot
+        : Array.isArray(snapshot)
+          ? {
+              snapshotType: "legacy-row-array-v1",
+              rowIndices: snapshot,
+              count: snapshot.length,
+            }
+          : {
+              snapshotType: "empty-v1",
+              rowIndices: [],
+              count: 0,
+            };
     const snapshotCount =
-      snapshot && Number.isFinite(snapshot.count)
-        ? snapshot.count
-        : snapshotRows.length;
+      Number.isFinite(snapshotPayload.count) && Number(snapshotPayload.count) >= 0
+        ? Math.floor(Number(snapshotPayload.count))
+        : Array.isArray(snapshotPayload.rows)
+          ? snapshotPayload.rows.length
+          : Array.isArray(snapshotPayload.rowIndices) ||
+              ArrayBuffer.isView(snapshotPayload.rowIndices)
+            ? snapshotPayload.rowIndices.length
+            : 0;
 
     reporter.append(
       `Sort benchmark started on ${formatCount(api.getRowCount())} rows.`
@@ -639,7 +656,7 @@ async function runSortBenchmark(options) {
               direction
             );
             const result = api.runSortSnapshotPass(
-              snapshotRows,
+              snapshotPayload,
               descriptors,
               sortMode
             );

@@ -97,7 +97,7 @@ test("runtime sort snapshot path consumes precomputed worker ranks", async () =>
 
   const snapshot = runtime.buildSortRowsSnapshot({});
   const sortResult = runtime.runSortSnapshotPass(
-    snapshot.rows,
+    snapshot,
     [{ columnKey: "index", direction: "asc" }],
     "native"
   );
