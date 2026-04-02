@@ -21,9 +21,9 @@ I did not prioritize building a worker-based filtering/sorting pipeline that spl
 
 On a 1,000,000 row table, this project reaches (vs native browser implementations):
 
-- Filtering: about **12 ms** total on average, roughly a **77x** improvement
-- Single-column sorting: about **1 ms**, roughly a **1500x** improvement
-- Two-column sorting: about **20 ms** on average, roughly a **340x** improvement
+- Filtering: about **12 ms** total on average, roughly a **77x** improvement, ~2 OOMs (order of magnitude)
+- Single-column sorting: about **1 ms**, roughly a **1500x** improvement, more than 3 OOMs
+- Two-column sorting: about **5 ms** on average, roughly a **1360x** improvement, more than 3 OOMs
 
 With this benchmark profile, I think this may now be the fastest web table implementation.
 
