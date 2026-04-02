@@ -658,6 +658,21 @@ function createFastTableRuntime(options) {
     return sortRuntimeBridge.prewarmPrecomputedSortState();
   }
 
+  function resetPrecomputedSortState(rowCountOverride) {
+    if (
+      !sortRuntimeBridge ||
+      typeof sortRuntimeBridge.resetPrecomputedSortState !== "function"
+    ) {
+      return false;
+    }
+
+    const resolvedRowCount = Number.isFinite(rowCountOverride)
+      ? Math.max(0, Math.floor(Number(rowCountOverride)))
+      : getRowCount();
+    sortRuntimeBridge.resetPrecomputedSortState(resolvedRowCount);
+    return true;
+  }
+
   function getLastFilterResult() {
     return lastFilterResult;
   }
@@ -807,6 +822,7 @@ function createFastTableRuntime(options) {
     buildSortRowsSnapshot,
     runSortSnapshotPass,
     prewarmPrecomputedSortState,
+    resetPrecomputedSortState,
     getNumericColumnarForSave,
     restoreStateCore,
     hasTopLevelFilterCacheEntries,

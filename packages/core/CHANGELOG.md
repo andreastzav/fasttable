@@ -4,6 +4,23 @@ All notable changes to `@fasttable/core` will be documented in this file.
 
 The format follows Keep a Changelog and semantic versioning.
 
+## [0.5.9] - 2026-04-03
+
+### Changed
+
+- Browser benchmark UI now defaults to macro tick policy (`setTimeout(0)`), so telemetry lines render progressively instead of appearing only at the end.
+- Sorting benchmark precomputed state is now reset per benchmark invocation:
+  - reset before timed runs start
+  - reset again in final restore (`finally`)
+  This prevents cross-run carryover where repeated button clicks could show near-zero warm-state timings.
+- Runtime/engine/benchmark adapter contract extended with `resetPrecomputedSortState(...)` so benchmark orchestration can request explicit precomputed-state resets.
+
+### Tests
+
+- Updated hardcut regression expectation for benchmark tick defaults:
+  - browser wrapper default: `macro`
+  - CLI default: `micro`
+
 ## [0.5.8] - 2026-04-02
 
 ### Changed

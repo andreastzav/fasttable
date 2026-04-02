@@ -437,6 +437,13 @@ function createFastTableEngine(options) {
     return callRuntime("prewarmPrecomputedSortState", []);
   }
 
+  function resetPrecomputedSortState(rowCountOverride) {
+    if (!hasRuntimeMethod("resetPrecomputedSortState")) {
+      return false;
+    }
+    return callRuntime("resetPrecomputedSortState", [rowCountOverride]);
+  }
+
   function getNumericColumnarForSave() {
     if (hasRuntimeMethod("getNumericColumnarForSave")) {
       return callRuntime("getNumericColumnarForSave", []);
@@ -680,6 +687,9 @@ function createFastTableEngine(options) {
       prewarmPrecomputedSortState() {
         return prewarmPrecomputedSortState();
       },
+      resetPrecomputedSortState(rowCountOverride) {
+        return resetPrecomputedSortState(rowCountOverride);
+      },
       isTimSortAvailable() {
         const sortModes = getSortModes();
         return Array.isArray(sortModes) && sortModes.includes("timsort");
@@ -724,6 +734,7 @@ function createFastTableEngine(options) {
     clearAllFilterCaches,
     bumpTopLevelFilterCacheRevision,
     prewarmPrecomputedSortState,
+    resetPrecomputedSortState,
     getNumericColumnarForSave,
     restoreStateCore,
     createRuntimeOperations,

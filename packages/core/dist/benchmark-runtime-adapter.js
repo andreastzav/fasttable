@@ -184,6 +184,14 @@ function createBenchmarkRuntimeAdapter(options) {
       }
       return callApiMethod(api, "prewarmPrecomputedSortState", [], false);
     },
+    resetPrecomputedSortState(rowCountOverride) {
+      return callApiMethod(
+        api,
+        "resetPrecomputedSortState",
+        [rowCountOverride],
+        false
+      );
+    },
     isTimSortAvailable() {
       return callApiMethod(api, "isTimSortAvailable", [], false);
     },

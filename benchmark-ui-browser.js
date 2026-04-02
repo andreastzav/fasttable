@@ -44,7 +44,7 @@ function createUiBenchmarkDelayTick(input) {
       : input
         ? input.tickPolicy
         : "";
-  const fallbackPolicy = "micro";
+  const fallbackPolicy = "macro";
   const resolvedPolicy = resolveBenchmarkTickPolicy(
     requestedPolicy || readGlobalBenchmarkTickPolicy(),
     fallbackPolicy

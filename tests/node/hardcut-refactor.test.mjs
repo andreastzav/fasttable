@@ -542,7 +542,7 @@ test("benchmark restore uses restoreStateCore and does not run legacy filter res
   assert.equal(sortApiCalls.setSortOptions, 0);
 });
 
-test("benchmark tick default parity remains micro in browser wrapper and CLI", () => {
+test("benchmark tick defaults are browser:macro and cli:micro", () => {
   const benchmarkUiSource = fs.readFileSync(
     path.join(repoRoot, "benchmark-ui-browser.js"),
     "utf8"
@@ -553,8 +553,8 @@ test("benchmark tick default parity remains micro in browser wrapper and CLI", (
   );
 
   assert.ok(
-    benchmarkUiSource.includes('const fallbackPolicy = "micro";'),
-    "benchmark-ui should default fallback tick policy to micro."
+    benchmarkUiSource.includes('const fallbackPolicy = "macro";'),
+    "benchmark-ui should default fallback tick policy to macro."
   );
   assert.ok(
     benchCliSource.includes('tickPolicy: "micro"'),

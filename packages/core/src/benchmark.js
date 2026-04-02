@@ -746,6 +746,11 @@ async function runSortBenchmark(options) {
   let error = null;
 
   try {
+    if (typeof api.resetPrecomputedSortState === "function") {
+      api.resetPrecomputedSortState(api.getRowCount());
+      await delayTick();
+    }
+
     // Sorting benchmark always runs on the full table snapshot.
     // Active UI filters are intentionally ignored here.
     const snapshot = api.buildSortRowsSnapshot({});
@@ -923,6 +928,9 @@ async function runSortBenchmark(options) {
     );
   } finally {
     try {
+      if (typeof api.resetPrecomputedSortState === "function") {
+        api.resetPrecomputedSortState(api.getRowCount());
+      }
       await api.restoreStateCore({
         sortOptions: originalSortOptions,
       });
