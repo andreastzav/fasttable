@@ -60,10 +60,7 @@ function createSortBenchmarkRuntimeBridge(options) {
     runtime.setRawFilters(runtimeRawFilters);
     runtime.setSortOptions(getSortOptions());
 
-    const selectedSortMode = getSortMode();
-    if (selectedSortMode !== "precomputed") {
-      runtime.setSortMode(selectedSortMode);
-    }
+    runtime.setSortMode(getSortMode());
 
     return runtimeRawFilters;
   }
@@ -85,10 +82,18 @@ function createSortBenchmarkRuntimeBridge(options) {
     return runtime.runSortSnapshotPass(rowsSnapshot, descriptors, requestedMode);
   }
 
+  function prewarmPrecomputedSortState() {
+    if (typeof runtime.prewarmPrecomputedSortState === "function") {
+      return runtime.prewarmPrecomputedSortState();
+    }
+    return false;
+  }
+
   return {
     sync,
     buildSortRowsSnapshot,
     runSortSnapshotPass,
+    prewarmPrecomputedSortState,
   };
 }
 

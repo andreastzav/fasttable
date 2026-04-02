@@ -427,6 +427,12 @@ function createFastTableEngine(options) {
           adapters.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode)
         );
       },
+      prewarmPrecomputedSortState() {
+        if (typeof adapters.prewarmPrecomputedSortState !== "function") {
+          return false;
+        }
+        return adapters.prewarmPrecomputedSortState();
+      },
       isTimSortAvailable() {
         if (typeof adapters.isTimSortAvailable === "function") {
           return adapters.isTimSortAvailable();

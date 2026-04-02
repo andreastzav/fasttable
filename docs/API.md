@@ -11,8 +11,11 @@ Main source files in `packages/core/src`:
 - `generation.js`: data generation + object/numeric/columnar derivations.
 - `filtering.js`: filtering controllers and dictionary/planner paths.
 - `filtering-orchestration.js`: shared filtering orchestration/cache layer for browser and CLI adapters.
+- `filter-runtime-bridge.js`: shared runtime-facing filtering execution bridge for browser and CLI/runtime adapters.
 - `sorting.js`: sort controllers, typed comparators, index sorting.
+- `sorting-precomputed-runtime.js`: shared precomputed sorting runtime used by runtime/CLI/browser benchmark adapters.
 - `sorting-orchestration.js`: shared sort benchmark orchestration layer for browser and CLI adapters.
+- `sort-runtime-bridge.js`: shared runtime-facing sorting bridge handling mode dispatch and precomputed integration.
 - `sort-benchmark-runtime.js`: shared sort-benchmark runtime bridge used by thin browser/CLI adapters.
 - `io.js`: binary codec and format conversion utilities.
 - `io-browser.js`, `io-node.js`: browser/node I/O adapters.
@@ -46,10 +49,13 @@ Build output:
   - `@fasttable/core/generation`
   - `@fasttable/core/filtering`
   - `@fasttable/core/filtering-orchestration`
+  - `@fasttable/core/filter-runtime-bridge`
   - `@fasttable/core/sorting`
   - `@fasttable/core/sorting-orchestration`
   - `@fasttable/core/sort-benchmark-runtime`
 - `experimental`:
+  - `@fasttable/core/sorting-precomputed-runtime`
+  - `@fasttable/core/sort-runtime-bridge`
   - `@fasttable/core/engine`
   - `@fasttable/core/generation-worker-protocol`
   - `@fasttable/core/generation-workers`
@@ -79,8 +85,11 @@ Build output:
 - `@fasttable/core/generation`
 - `@fasttable/core/filtering`
 - `@fasttable/core/filtering-orchestration`
+- `@fasttable/core/filter-runtime-bridge`
 - `@fasttable/core/sorting`
+- `@fasttable/core/sorting-precomputed-runtime`
 - `@fasttable/core/sorting-orchestration`
+- `@fasttable/core/sort-runtime-bridge`
 - `@fasttable/core/sort-benchmark-runtime`
 - `@fasttable/core/io`
 - `@fasttable/core/io-adapter`
@@ -139,6 +148,7 @@ Returned runtime object:
 - `setSortOptions(options) -> { useTypedComparator, useIndexSort }`
 - `buildSortRowsSnapshot(rawFilters?) -> { snapshotType, rowIndices, count, filterCoreMs }`
 - `runSortSnapshotPass(rowsSnapshot, descriptors, sortMode?) -> sortResult`
+- `prewarmPrecomputedSortState() -> boolean`
 - `getNumericColumnarForSave() -> numericColumnarData | null`
 
 Filter result shape:
@@ -152,7 +162,7 @@ Current ownership semantics (important):
 
 Sort result shape:
 
-- `{ sortMs, sortCoreMs, sortPrepMs, sortTotalMs, sortMode, sortedCount, descriptors, dataPath, comparatorMode }`
+- `{ sortMs, sortCoreMs, sortPrepMs, sortTotalMs, sortMode, sortedCount, descriptors, dataPath, comparatorMode, sortedIndices? }`
 
 Sort snapshot contract:
 
@@ -166,6 +176,10 @@ Sort snapshot contract:
 
 - `runFilteringBenchmark({ api, currentOnly?, rounds?, benchmarkCases?, now?, delayTick?, onUpdate? })`
 - `runSortBenchmark({ api, currentOnly?, rounds?, sortCases?, now?, delayTick?, onUpdate? })`
+
+Sort benchmark prewarm behavior:
+
+- If sort variants include `precomputed` and `api.prewarmPrecomputedSortState` exists, benchmark prewarm is triggered once before measurement in both browser and CLI flows.
 
 Return shape (both):
 

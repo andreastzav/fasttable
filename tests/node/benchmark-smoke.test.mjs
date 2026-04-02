@@ -31,9 +31,13 @@ test("benchmark smoke works against src runtime", async () => {
   assert.equal(sortSnapshot.count, sortSnapshot.rowIndices.length);
 
   const availableSortModes = sortingApi.getAvailableSortModes();
-  assert.deepEqual(runtime.getSortModes(), availableSortModes);
-  assert.ok(runtime.getSortModes().includes("native"));
-  assert.equal(runtime.getSortModes().includes("timsort"), false);
+  const runtimeSortModes = runtime.getSortModes();
+  assert.ok(runtimeSortModes.includes("native"));
+  assert.ok(runtimeSortModes.includes("precomputed"));
+  for (let i = 0; i < availableSortModes.length; i += 1) {
+    assert.ok(runtimeSortModes.includes(availableSortModes[i]));
+  }
+  assert.equal(runtimeSortModes.includes("timsort"), false);
 
   const filtering = await benchmark.runFilteringBenchmark({
     api: runtime,

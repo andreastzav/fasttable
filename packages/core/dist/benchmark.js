@@ -281,7 +281,7 @@ async function runFilteringBenchmark(options) {
     useSmartFiltering: false,
     useFilterCache: false,
   };
-  const benchmarkStartMs = now();
+  let benchmarkStartMs = now();
   const totalByCombination = [];
   let error = null;
 
@@ -569,7 +569,10 @@ async function runSortBenchmark(options) {
     currentOnly,
     originalSortOptions
   );
-  const benchmarkStartMs = now();
+  const includesPrecomputedMode = sortModeVariants.some(
+    (variant) => variant && variant.mode === "precomputed"
+  );
+  let benchmarkStartMs = now();
   const totalsByMode = [];
   let error = null;
 
@@ -600,6 +603,17 @@ async function runSortBenchmark(options) {
               ArrayBuffer.isView(snapshotPayload.rowIndices)
             ? snapshotPayload.rowIndices.length
             : 0;
+
+    if (
+      includesPrecomputedMode &&
+      typeof api.prewarmPrecomputedSortState === "function"
+    ) {
+      // Prewarm must happen after snapshot sync so precomputed state is not
+      // reset right before timed runs.
+      api.prewarmPrecomputedSortState();
+      await delayTick();
+    }
+    benchmarkStartMs = now();
 
     reporter.append(
       `Sort benchmark started on ${formatCount(api.getRowCount())} rows.`
