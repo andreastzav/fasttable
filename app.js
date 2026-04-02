@@ -1,6 +1,5 @@
 import { createFastTableEngine } from "@fasttable/core/engine";
 import { createFilterRuntimeBridge } from "@fasttable/core/filter-runtime-bridge";
-import { createFilteringRuntimeOrchestrator } from "@fasttable/core/filtering-runtime-orchestration";
 import { createSortRuntimeBridge } from "@fasttable/core/sort-runtime-bridge";
 import {
   ensureNumericColumnarSortedIndices as ensureCoreNumericColumnarSortedIndices,
@@ -185,27 +184,6 @@ const filterRuntimeBridge = createFilterRuntimeBridge({
   topLevelFilterCacheMediumMaxResults: TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS,
   topLevelFilterCacheSmallCapacity: TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY,
   topLevelFilterCacheMediumCapacity: TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY,
-});
-const filteringRuntimeOrchestrator = createFilteringRuntimeOrchestrator({
-  runFilterPassWithRawFilters(rawFilters, options) {
-    const executionOptions = options || {};
-    const filterOptions = executionOptions.filterOptions || getFilterOptions();
-    if (
-      fastTableEngine &&
-      typeof fastTableEngine.runFilterPassWithRawFilters === "function"
-    ) {
-      return fastTableEngine.runFilterPassWithRawFilters(rawFilters, {
-        filterOptions,
-      });
-    }
-
-    return filterRuntimeBridge.runFilterPassWithRawFilters(rawFilters, {
-      filterOptions,
-    });
-  },
-  runSortForFilterResult(filterResult, options) {
-    return buildSortedIndicesForCurrentResult(filterResult, options);
-  },
 });
 const virtualPreviewRenderer =
   tableRenderingApi &&
@@ -941,12 +919,14 @@ function areSortDescriptorListsEqual(leftList, rightList) {
 function buildRowsSnapshotFromRawFilters(rawFilters) {
   const sourceRawFilters =
     rawFilters && typeof rawFilters === "object" ? rawFilters : readRawFilters();
-  const filterResult = filterRuntimeBridge.runFilterPassWithRawFilters(
-    sourceRawFilters,
-    {
-      filterOptions: getFilterOptions(),
-    }
-  );
+  const filterResult =
+    fastTableEngine && typeof fastTableEngine.executeFilterCore === "function"
+      ? fastTableEngine.executeFilterCore(sourceRawFilters, {
+          filterOptions: getFilterOptions(),
+        })
+      : filterRuntimeBridge.runFilterPassWithRawFilters(sourceRawFilters, {
+          filterOptions: getFilterOptions(),
+        });
   const loadedRowCount = getLoadedRowCount();
   const snapshotIndices = materializeFilteredIndexArray(
     filterResult ? filterResult.filteredIndices : null,
@@ -2138,11 +2118,14 @@ function buildSortedIndicesForCurrentResult(filterResult, options) {
       typeof requestedMode === "string" && requestedMode !== ""
         ? requestedMode
         : selectedSortMode;
-    const runtimeSortRun = fastTableEngine.runSortSnapshotPass(
-      rowsSnapshot,
-      activeDescriptors,
-      mode
-    );
+    const runtimeSortRun =
+      fastTableEngine && typeof fastTableEngine.executeSortCore === "function"
+        ? fastTableEngine.executeSortCore(rowsSnapshot, activeDescriptors, mode)
+        : fastTableEngine.runSortSnapshotPass(
+            rowsSnapshot,
+            activeDescriptors,
+            mode
+          );
     return normalizeRuntimeSortRun(runtimeSortRun, mode);
   }
 
@@ -2392,14 +2375,95 @@ function runFilterCore(rawFilters, options) {
     };
   }
 
-  const orchestration = filteringRuntimeOrchestrator.execute(sourceRawFilters, {
-    filterOptions,
-    skipRender,
-    preferPrecomputedFastPath,
-  });
-  if (!orchestration) {
+  const filterResult =
+    fastTableEngine && typeof fastTableEngine.executeFilterCore === "function"
+      ? fastTableEngine.executeFilterCore(sourceRawFilters, {
+          filterOptions,
+        })
+      : filterRuntimeBridge.runFilterPassWithRawFilters(sourceRawFilters, {
+          filterOptions,
+        });
+  if (!filterResult) {
     return null;
   }
+
+  let sortRun = null;
+  let renderIndices = filterResult.filteredIndices;
+  if (!skipRender) {
+    sortRun = buildSortedIndicesForCurrentResult(filterResult, {
+      preferPrecomputedFastPath,
+      rawFilters: sourceRawFilters,
+    });
+    if (sortRun && hasIndexCollection(sortRun.indices)) {
+      renderIndices = sortRun.indices;
+    }
+  }
+
+  const dictionaryKeySearchPlan = filterResult.dictionaryPrefilter || null;
+  const reverseIndexMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.durationMs
+      : 0;
+  const reverseIndexSearchMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.searchMs || 0
+      : 0;
+  const reverseIndexSearchFullMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.searchFullMs || 0
+      : 0;
+  const reverseIndexSearchRefinedMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.searchRefinedMs || 0
+      : 0;
+  const reverseIndexMergeMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.mergeMs || 0
+      : 0;
+  const reverseIndexMergeConcatMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.mergeConcatMs || 0
+      : 0;
+  const reverseIndexMergeSortMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.mergeSortMs || 0
+      : 0;
+  const reverseIndexIntersectMs =
+    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+      ? dictionaryKeySearchPlan.intersectionMs || 0
+      : 0;
+
+  const orchestration = {
+    filterResult,
+    filterModePath:
+      typeof filterResult.modePath === "string" ? filterResult.modePath : "",
+    filteredCount: filterResult.filteredCount,
+    filteredIndices: filterResult.filteredIndices,
+    renderIndices,
+    coreMs: Number(filterResult.coreMs) || 0,
+    reverseIndexMs,
+    reverseIndexSearchMs,
+    reverseIndexSearchFullMs,
+    reverseIndexSearchRefinedMs,
+    reverseIndexMergeMs,
+    reverseIndexMergeConcatMs,
+    reverseIndexMergeSortMs,
+    reverseIndexIntersectMs,
+    active: filterResult.active === true,
+    sort: sortRun,
+    topLevelFilterCacheEvent: filterResult.topLevelCacheEvent || null,
+    reverseIndex:
+      dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
+        ? dictionaryKeySearchPlan
+        : null,
+    selectedBaseCandidateCount: Number.isFinite(
+      filterResult.selectedBaseCandidateCount
+    )
+      ? Number(filterResult.selectedBaseCandidateCount)
+      : -1,
+    filterOptions,
+    dictionaryKeySearchPlan,
+  };
   window.fastTableLastFilterMode =
     orchestration.filterModePath || getCurrentFilterModeKey();
 
