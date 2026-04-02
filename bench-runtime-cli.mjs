@@ -10,7 +10,6 @@ import {
   runFilteringBenchmark,
   runSortBenchmark,
 } from "./packages/core/dist/benchmark.js";
-import { createSortBenchmarkRuntimeBridge } from "./packages/core/dist/sort-benchmark-runtime.js";
 
 function parseArgs(argv) {
   const args = {
@@ -177,16 +176,6 @@ function buildCliSortModes(runtime) {
   return modes;
 }
 
-function isValidNumericColumnarData(data) {
-  return (
-    data &&
-    typeof data === "object" &&
-    Number.isInteger(data.rowCount) &&
-    data.rowCount >= 0 &&
-    Array.isArray(data.columns)
-  );
-}
-
 function createCliBenchmarkApi(runtime, forcedSortMode) {
   const availableSortModes = buildCliSortModes(runtime);
   const normalizedForcedMode =
@@ -199,18 +188,8 @@ function createCliBenchmarkApi(runtime, forcedSortMode) {
       ? normalizedForcedMode
       : "";
 
-  const sortBenchmarkRuntimeBridge = createSortBenchmarkRuntimeBridge({
-    runtime,
-    readRawFilters: () => runtime.getRawFilters(),
-    getRowCount: () => runtime.getRowCount(),
-    getModeOptions: () => runtime.getModeOptions(),
-    getSortOptions: () => runtime.getSortOptions(),
-    getSortMode: () =>
-      effectiveForcedMode !== "" ? effectiveForcedMode : runtime.getSortMode(),
-    getNumericColumnarData: () => runtime.getNumericColumnarForSave(),
-    isValidNumericColumnarData,
-  });
   const engine = createFastTableEngine({
+    runtime,
     adapters: {
       hasData: () => runtime.hasData(),
       getRowCount: () => runtime.getRowCount(),
@@ -223,10 +202,6 @@ function createCliBenchmarkApi(runtime, forcedSortMode) {
         runtime.setSingleFilter(columnKey, value),
       clearFilters: () => runtime.clearFilters(),
       runFilterPass: (options) => runtime.runFilterPass(options),
-      runSingleFilterPass: (columnKey, value, options) =>
-        runtime.runSingleFilterPass(columnKey, value, options),
-      runFilterPassWithRawFilters: (rawFilters, options) =>
-        runtime.runFilterPassWithRawFilters(rawFilters, options),
       getSortModes: () =>
         effectiveForcedMode !== ""
           ? [effectiveForcedMode]
@@ -236,23 +211,6 @@ function createCliBenchmarkApi(runtime, forcedSortMode) {
       getSortOptions: () => runtime.getSortOptions(),
       setSortOptions: (nextSortOptions) =>
         runtime.setSortOptions(nextSortOptions),
-      buildSortRowsSnapshot: (rawFilters) =>
-        sortBenchmarkRuntimeBridge.buildSortRowsSnapshot(rawFilters),
-      runSortSnapshotPass: (rowsSnapshot, descriptors, sortMode) => {
-        const requestedMode =
-          typeof sortMode === "string" && sortMode.trim() !== ""
-            ? sortMode.trim().toLowerCase()
-            : effectiveForcedMode !== ""
-              ? effectiveForcedMode
-              : runtime.getSortMode();
-        return sortBenchmarkRuntimeBridge.runSortSnapshotPass(
-          rowsSnapshot,
-          descriptors,
-          requestedMode
-        );
-      },
-      prewarmPrecomputedSortState: () =>
-        sortBenchmarkRuntimeBridge.prewarmPrecomputedSortState(),
       isTimSortAvailable: () => availableSortModes.includes("timsort"),
     },
   });
