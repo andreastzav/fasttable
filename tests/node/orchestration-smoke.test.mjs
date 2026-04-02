@@ -16,6 +16,8 @@ let srcSortingOrchestration;
 let distSortingOrchestration;
 let srcSortBenchmarkRuntimeBridge;
 let distSortBenchmarkRuntimeBridge;
+let srcBenchmarkRuntimeAdapter;
+let distBenchmarkRuntimeAdapter;
 let srcRuntime;
 let distRuntime;
 
@@ -64,6 +66,12 @@ before(async () => {
   distSortBenchmarkRuntimeBridge = await import(
     "../../packages/core/dist/sort-benchmark-runtime.js"
   );
+  srcBenchmarkRuntimeAdapter = await import(
+    "../../packages/core/src/benchmark-runtime-adapter.js"
+  );
+  distBenchmarkRuntimeAdapter = await import(
+    "../../packages/core/dist/benchmark-runtime-adapter.js"
+  );
   srcRuntime = await import("../../packages/core/src/runtime.js");
   distRuntime = await import("../../packages/core/dist/runtime.js");
 });
@@ -107,6 +115,14 @@ test("orchestration modules export expected factories in src and dist", () => {
   );
   assert.equal(
     typeof distSortBenchmarkRuntimeBridge.createSortBenchmarkRuntimeBridge,
+    "function"
+  );
+  assert.equal(
+    typeof srcBenchmarkRuntimeAdapter.createBenchmarkRuntimeAdapter,
+    "function"
+  );
+  assert.equal(
+    typeof distBenchmarkRuntimeAdapter.createBenchmarkRuntimeAdapter,
     "function"
   );
   assert.equal(

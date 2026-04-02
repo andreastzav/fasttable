@@ -11,5 +11,6 @@ export * from "./sorting-precomputed-runtime.js";
 export * from "./sorting-orchestration.js";
 export * from "./sort-runtime-bridge.js";
 export * from "./sort-benchmark-runtime.js";
+export * from "./benchmark-runtime-adapter.js";
 export * from "./io.js";
 export * from "./benchmark.js";

@@ -1,3 +1,4 @@
+import { createBenchmarkRuntimeAdapter } from "@fasttable/core";
 import {
   createBenchmarkDelayTick,
   resolveBenchmarkTickPolicy,
@@ -99,10 +100,14 @@ function bindBenchmarkUi(options) {
   }
 
   async function run(currentOnly) {
-    const api =
+    const sourceApi =
       typeof input.getBenchmarkApi === "function"
         ? input.getBenchmarkApi()
         : getBenchmarkApiFromWindow();
+    const api =
+      sourceApi && typeof sourceApi === "object"
+        ? createBenchmarkRuntimeAdapter({ api: sourceApi })
+        : sourceApi;
     const delayTick = createUiBenchmarkDelayTick(input);
 
     setAllActionButtonsDisabled(true, primaryBtnEl, currentBtnEl);

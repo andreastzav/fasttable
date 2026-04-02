@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createFastTableRuntime } from "./packages/core/dist/runtime.js";
 import { createFastTableEngine } from "./packages/core/dist/engine.js";
+import { createBenchmarkRuntimeAdapter } from "./packages/core/dist/benchmark-runtime-adapter.js";
 import { loadColumnarBinaryPreset } from "./packages/core/dist/io-node.js";
 import { fastTableGenerationWorkersNodeApi } from "./packages/core/dist/generation-workers-node.js";
 import {
@@ -312,7 +313,9 @@ async function main() {
     );
   }
 
-  const benchmarkApi = createCliBenchmarkApi(runtime, args.sortMode);
+  const benchmarkApi = createBenchmarkRuntimeAdapter({
+    api: createCliBenchmarkApi(runtime, args.sortMode),
+  });
   const delayTick = createBenchmarkDelayTick(
     resolveBenchmarkTickPolicy(args.tickPolicy, "micro")
   );

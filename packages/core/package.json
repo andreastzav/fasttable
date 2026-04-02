@@ -49,6 +49,7 @@
     "./sorting-orchestration": "./dist/sorting-orchestration.js",
     "./sort-runtime-bridge": "./dist/sort-runtime-bridge.js",
     "./sort-benchmark-runtime": "./dist/sort-benchmark-runtime.js",
+    "./benchmark-runtime-adapter": "./dist/benchmark-runtime-adapter.js",
     "./benchmark": "./dist/benchmark.js",
     "./io": "./dist/io.js",
     "./io-adapter": {
