@@ -42,6 +42,7 @@
     "./runtime": "./dist/runtime.js",
     "./filtering": "./dist/filtering.js",
     "./filtering-orchestration": "./dist/filtering-orchestration.js",
+    "./filtering-runtime-orchestration": "./dist/filtering-runtime-orchestration.js",
     "./filter-runtime-bridge": "./dist/filter-runtime-bridge.js",
     "./sorting": "./dist/sorting.js",
     "./sorting-precomputed-runtime": "./dist/sorting-precomputed-runtime.js",

@@ -11,6 +11,7 @@ Main source files in `packages/core/src`:
 - `generation.js`: data generation + object/numeric/columnar derivations.
 - `filtering.js`: filtering controllers and dictionary/planner paths.
 - `filtering-orchestration.js`: shared filtering orchestration/cache layer for browser and CLI adapters.
+- `filtering-runtime-orchestration.js`: shared filter+sort runtime-pass orchestration used by browser wrappers and adapters.
 - `filter-runtime-bridge.js`: shared runtime-facing filtering execution bridge for browser and CLI/runtime adapters.
 - `sorting.js`: sort controllers, typed comparators, index sorting.
 - `sorting-precomputed-runtime.js`: shared precomputed sorting runtime used by runtime/CLI/browser benchmark adapters.
@@ -49,6 +50,7 @@ Build output:
   - `@fasttable/core/generation`
   - `@fasttable/core/filtering`
   - `@fasttable/core/filtering-orchestration`
+  - `@fasttable/core/filtering-runtime-orchestration`
   - `@fasttable/core/filter-runtime-bridge`
   - `@fasttable/core/sorting`
   - `@fasttable/core/sorting-orchestration`
@@ -85,6 +87,7 @@ Build output:
 - `@fasttable/core/generation`
 - `@fasttable/core/filtering`
 - `@fasttable/core/filtering-orchestration`
+- `@fasttable/core/filtering-runtime-orchestration`
 - `@fasttable/core/filter-runtime-bridge`
 - `@fasttable/core/sorting`
 - `@fasttable/core/sorting-precomputed-runtime`

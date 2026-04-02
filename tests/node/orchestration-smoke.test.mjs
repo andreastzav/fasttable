@@ -4,6 +4,8 @@ import { ensureCoreDistBuilt } from "./helpers.mjs";
 
 let srcFilteringOrchestration;
 let distFilteringOrchestration;
+let srcFilteringRuntimeOrchestration;
+let distFilteringRuntimeOrchestration;
 let srcFilterRuntimeBridge;
 let distFilterRuntimeBridge;
 let srcSortRuntimeBridge;
@@ -25,6 +27,12 @@ before(async () => {
   );
   distFilteringOrchestration = await import(
     "../../packages/core/dist/filtering-orchestration.js"
+  );
+  srcFilteringRuntimeOrchestration = await import(
+    "../../packages/core/src/filtering-runtime-orchestration.js"
+  );
+  distFilteringRuntimeOrchestration = await import(
+    "../../packages/core/dist/filtering-runtime-orchestration.js"
   );
   srcFilterRuntimeBridge = await import(
     "../../packages/core/src/filter-runtime-bridge.js"
@@ -67,6 +75,14 @@ test("orchestration modules export expected factories in src and dist", () => {
   );
   assert.equal(
     typeof distFilteringOrchestration.createFilteringOrchestrator,
+    "function"
+  );
+  assert.equal(
+    typeof srcFilteringRuntimeOrchestration.createFilteringRuntimeOrchestrator,
+    "function"
+  );
+  assert.equal(
+    typeof distFilteringRuntimeOrchestration.createFilteringRuntimeOrchestrator,
     "function"
   );
   assert.equal(
@@ -219,6 +235,87 @@ function runFilterBridgeSmoke(factory) {
 test("filter runtime bridge smoke works for src and dist", () => {
   runFilterBridgeSmoke(srcFilterRuntimeBridge.createFilterRuntimeBridge);
   runFilterBridgeSmoke(distFilterRuntimeBridge.createFilterRuntimeBridge);
+});
+
+function runFilteringRuntimeOrchestratorSmoke(factory) {
+  const orchestrator = factory({
+    runFilterPassWithRawFilters(rawFilters, options) {
+      const active = Object.keys(rawFilters || {}).length > 0;
+      const dictUsed =
+        options &&
+        options.filterOptions &&
+        options.filterOptions.useDictionaryKeySearch === true &&
+        active;
+      return {
+        modePath: "numeric-columnar",
+        filteredCount: active ? 2 : 3,
+        filteredIndices: active
+          ? { buffer: new Uint32Array([0, 2]), count: 2 }
+          : null,
+        coreMs: 1.5,
+        active,
+        topLevelCacheEvent: { enabled: true, hit: false },
+        dictionaryPrefilter: dictUsed
+          ? {
+              used: true,
+              durationMs: 0.5,
+              searchMs: 0.1,
+              searchFullMs: 0.06,
+              searchRefinedMs: 0.04,
+              mergeMs: 0.2,
+              mergeConcatMs: 0.08,
+              mergeSortMs: 0.12,
+              intersectionMs: 0.2,
+            }
+          : null,
+        selectedBaseCandidateCount: 3,
+      };
+    },
+    runSortForFilterResult(filterResult) {
+      return {
+        indices: filterResult.filteredIndices
+          ? filterResult.filteredIndices.buffer
+          : new Uint32Array([0, 1, 2]),
+        sortedCount: filterResult.filteredCount,
+        result: {
+          durationMs: 0.2,
+          sortMode: "precomputed",
+          comparatorMode: "precomputed",
+          dataPath: "indices+precomputed-full-asc",
+          effectiveDescriptors: [{ columnKey: "index", direction: "asc" }],
+        },
+        sortTotalMs: 0.2,
+        sortPrepMs: 0,
+        rankBuildMs: 0,
+      };
+    },
+  });
+
+  const run = orchestrator.execute(
+    { firstName: "a" },
+    {
+      filterOptions: { useDictionaryKeySearch: true },
+      skipRender: false,
+      preferPrecomputedFastPath: true,
+    }
+  );
+
+  assert.ok(run && typeof run === "object");
+  assert.equal(run.active, true);
+  assert.equal(run.filteredCount, 2);
+  assert.ok(run.renderIndices instanceof Uint32Array);
+  assert.equal(run.coreMs, 1.5);
+  assert.equal(run.reverseIndexMs, 0.5);
+  assert.ok(run.sort && typeof run.sort === "object");
+}
+
+test("filtering runtime orchestrator smoke works for src and dist", () => {
+  runFilteringRuntimeOrchestratorSmoke(
+    srcFilteringRuntimeOrchestration.createFilteringRuntimeOrchestrator
+  );
+  runFilteringRuntimeOrchestratorSmoke(
+    distFilteringRuntimeOrchestration.createFilteringRuntimeOrchestrator
+  );
 });
 
 function runSortBridgeSmoke(

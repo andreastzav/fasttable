@@ -187,6 +187,16 @@ function createFastTableEngine(options) {
     return withActionState("applyFilters", () => adapters.runFilterPass(options));
   }
 
+  function runFilterPassWithRawFilters(rawFilters, options) {
+    if (typeof adapters.runFilterPassWithRawFilters !== "function") {
+      return null;
+    }
+
+    return withActionState("applyFilters", () =>
+      adapters.runFilterPassWithRawFilters(rawFilters || {}, options)
+    );
+  }
+
   function applySingleFilter(columnKey, value, options) {
     if (typeof adapters.runSingleFilterPass === "function") {
       return withActionState("applySingleFilter", () =>
@@ -209,6 +219,14 @@ function createFastTableEngine(options) {
     }
 
     return null;
+  }
+
+  function runSortSnapshotPassCore(rowsSnapshot, descriptors, sortMode) {
+    if (typeof adapters.runSortSnapshotPass !== "function") {
+      return null;
+    }
+
+    return adapters.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
   }
 
   function applySort(runOptions) {
@@ -237,8 +255,22 @@ function createFastTableEngine(options) {
             ? adapters.getSortMode()
             : "native";
 
-      return adapters.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
+      return runSortSnapshotPassCore(rowsSnapshot, descriptors, sortMode);
     });
+  }
+
+  function buildSortRowsSnapshot(rawFilters) {
+    if (typeof adapters.buildSortRowsSnapshot !== "function") {
+      return [];
+    }
+
+    return adapters.buildSortRowsSnapshot(rawFilters);
+  }
+
+  function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
+    return withActionState("applySort", () =>
+      runSortSnapshotPassCore(rowsSnapshot, descriptors, sortMode)
+    );
   }
 
   async function generate(generateOptions) {
@@ -375,13 +407,7 @@ function createFastTableEngine(options) {
         return applySingleFilter(columnKey, value, options);
       },
       runFilterPassWithRawFilters(rawFilters, options) {
-        if (typeof adapters.runFilterPassWithRawFilters !== "function") {
-          return null;
-        }
-
-        return withActionState("applyFilters", () =>
-          adapters.runFilterPassWithRawFilters(rawFilters, options)
-        );
+        return runFilterPassWithRawFilters(rawFilters, options);
       },
       getSortModes() {
         if (typeof adapters.getSortModes === "function") {
@@ -412,20 +438,10 @@ function createFastTableEngine(options) {
         }
       },
       buildSortRowsSnapshot(rawFilters) {
-        if (typeof adapters.buildSortRowsSnapshot !== "function") {
-          return [];
-        }
-
-        return adapters.buildSortRowsSnapshot(rawFilters);
+        return buildSortRowsSnapshot(rawFilters);
       },
       runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-        if (typeof adapters.runSortSnapshotPass !== "function") {
-          return null;
-        }
-
-        return withActionState("applySort", () =>
-          adapters.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode)
-        );
+        return runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
       },
       prewarmPrecomputedSortState() {
         if (typeof adapters.prewarmPrecomputedSortState !== "function") {
@@ -450,8 +466,11 @@ function createFastTableEngine(options) {
     setRawFilters,
     clearFilters,
     applyFilters,
+    runFilterPassWithRawFilters,
     applySingleFilter,
     applySort,
+    buildSortRowsSnapshot,
+    runSortSnapshotPass,
     generate,
     createIOBridge,
     createBenchmarkApi,

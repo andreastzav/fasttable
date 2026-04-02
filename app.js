@@ -1,7 +1,7 @@
 import { createFastTableEngine } from "@fasttable/core/engine";
-import { createFastTableRuntime } from "@fasttable/core/runtime";
 import { createFilterRuntimeBridge } from "@fasttable/core/filter-runtime-bridge";
-import { createSortBenchmarkRuntimeBridge } from "@fasttable/core/sort-benchmark-runtime";
+import { createFilteringRuntimeOrchestrator } from "@fasttable/core/filtering-runtime-orchestration";
+import { createSortRuntimeBridge } from "@fasttable/core/sort-runtime-bridge";
 import {
   ensureNumericColumnarSortedIndices as ensureCoreNumericColumnarSortedIndices,
   ensureNumericColumnarSortedRanks as ensureCoreNumericColumnarSortedRanks,
@@ -126,6 +126,7 @@ let cachedObjectColumnarData = null;
 let cachedNumericRows = null;
 
 let cachedNumericColumnarData = null;
+let fastTableEngine = null;
 
 let currentRepresentation = "numeric";
 let currentLayout = "row";
@@ -172,18 +173,39 @@ const filterRuntimeBridge = createFilterRuntimeBridge({
   keyToIndex: columnIndexByKey,
   isValidNumericColumnarData,
   modePathByKey: {
-    "binary-columnar": "binary-columnar",
+    "binary-columnar": "numeric-columnar",
     "object-columnar": "object-columnar",
-    "numeric-row": "numeric-row",
-    "object-row": "object-row",
+    "numeric-row": "numeric-rows",
+    "object-row": "object-rows",
   },
-  syncAllControllerIndices: false,
+  syncAllControllerIndices: true,
   onCacheStateChange: syncClearFilterCacheButtonState,
   topLevelFilterCacheMinInsertMs: TOP_LEVEL_FILTER_CACHE_MIN_INSERT_MS,
   topLevelFilterCacheSmallMaxResults: TOP_LEVEL_FILTER_CACHE_SMALL_MAX_RESULTS,
   topLevelFilterCacheMediumMaxResults: TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS,
   topLevelFilterCacheSmallCapacity: TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY,
   topLevelFilterCacheMediumCapacity: TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY,
+});
+const filteringRuntimeOrchestrator = createFilteringRuntimeOrchestrator({
+  runFilterPassWithRawFilters(rawFilters, options) {
+    const executionOptions = options || {};
+    const filterOptions = executionOptions.filterOptions || getFilterOptions();
+    if (
+      fastTableEngine &&
+      typeof fastTableEngine.runFilterPassWithRawFilters === "function"
+    ) {
+      return fastTableEngine.runFilterPassWithRawFilters(rawFilters, {
+        filterOptions,
+      });
+    }
+
+    return filterRuntimeBridge.runFilterPassWithRawFilters(rawFilters, {
+      filterOptions,
+    });
+  },
+  runSortForFilterResult(filterResult, options) {
+    return buildSortedIndicesForCurrentResult(filterResult, options);
+  },
 });
 const virtualPreviewRenderer =
   tableRenderingApi &&
@@ -198,45 +220,16 @@ const virtualPreviewRenderer =
         rowHeight: 34,
       })
     : null;
-const precomputedSortScratch = {
-  rowCount: 0,
-  marks: null,
-  output: null,
-  work: null,
-  counts: null,
-  epoch: 1,
-};
-const precomputedGroupedSortScratch = {
-  rowCount: 0,
-  primary: null,
-  secondary: null,
-  counts: null,
-};
-const precomputedGroupedSortCache = {
-  rowCount: 0,
-  descriptors: [],
-  sortedOrder: null,
-  prefixStartsByLength: Object.create(null),
-  prefixEndsByLength: Object.create(null),
-};
-const precomputedSubsetSortCache = {
-  rowCount: 0,
-  descriptors: [],
-  sortedOrder: null,
-  sortedCount: 0,
-};
-const PRECOMPUTED_ORDER_CHECK_MAX_GROUP_SIZE = 16384;
-const benchmarkSortRuntime = createFastTableRuntime();
-const sortBenchmarkRuntimeBridge = createSortBenchmarkRuntimeBridge({
-  runtime: benchmarkSortRuntime,
-  readRawFilters,
-  getRowCount: getLoadedRowCount,
-  getModeOptions,
+const appSortRuntimeBridge = createSortRuntimeBridge({
+  now: () => performance.now(),
+  columnKeys,
+  columnIndexByKey,
+  columnTypeByKey: sortColumnTypeByKey,
   getSortOptions: getSortRuntimeOptions,
   getSortMode,
+  getRowCount: getLoadedRowCount,
+  getSchema: getFastTableSchema,
   getNumericColumnarData: getNumericColumnarForSave,
-  getRowsForRuntime: ensureObjectRowsAvailable,
-  isValidNumericColumnarData,
 });
 
 function formatMs(value) {
@@ -412,9 +405,6 @@ function setSortRuntimeOptions(nextOptions) {
   if (useIndexSortEl && typeof options.useIndexSort === "boolean") {
     useIndexSortEl.checked = options.useIndexSort;
   }
-
-  // Keep benchmark runtime sort flags in sync without rebuilding benchmark data.
-  benchmarkSortRuntime.setSortOptions(getSortRuntimeOptions());
 }
 
 function createZeroGenerationMetrics() {
@@ -948,28 +938,31 @@ function areSortDescriptorListsEqual(leftList, rightList) {
   return true;
 }
 
-function clearPrecomputedGroupedSortCache() {
-  precomputedGroupedSortCache.rowCount = 0;
-  precomputedGroupedSortCache.descriptors = [];
-  precomputedGroupedSortCache.sortedOrder = null;
-  precomputedGroupedSortCache.prefixStartsByLength = Object.create(null);
-  precomputedGroupedSortCache.prefixEndsByLength = Object.create(null);
-  precomputedSubsetSortCache.rowCount = 0;
-  precomputedSubsetSortCache.descriptors = [];
-  precomputedSubsetSortCache.sortedOrder = null;
-  precomputedSubsetSortCache.sortedCount = 0;
-}
-
 function buildRowsSnapshotFromRawFilters(rawFilters) {
-  return sortBenchmarkRuntimeBridge.buildSortRowsSnapshot(rawFilters);
+  const sourceRawFilters =
+    rawFilters && typeof rawFilters === "object" ? rawFilters : readRawFilters();
+  const filterResult = filterRuntimeBridge.runFilterPassWithRawFilters(
+    sourceRawFilters,
+    {
+      filterOptions: getFilterOptions(),
+    }
+  );
+  const loadedRowCount = getLoadedRowCount();
+  const snapshotIndices = materializeFilteredIndexArray(
+    filterResult ? filterResult.filteredIndices : null,
+    loadedRowCount
+  );
+
+  return {
+    snapshotType: "row-indices-v2",
+    rowIndices: snapshotIndices,
+    count: snapshotIndices.length,
+    filterCoreMs: Number(filterResult && filterResult.coreMs) || 0,
+  };
 }
 
 function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-  return sortBenchmarkRuntimeBridge.runSortSnapshotPass(
-    rowsSnapshot,
-    descriptors,
-    sortMode
-  );
+  return appSortRuntimeBridge.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
 }
 
 function getSortSymbolForState(state) {
@@ -1013,50 +1006,112 @@ function resetSortState(updateStatus) {
   }
 }
 
-function applySortAndRender() {
+function runSortCore(filterResult, options) {
+  const executionOptions = options || {};
   if (!sortController) {
-    return null;
+    return {
+      kind: "no-sort-controller",
+    };
   }
 
   if (getLoadedRowCount() === 0) {
-    setSortTelemetryStatus("No data loaded yet.");
+    return {
+      kind: "no-data",
+    };
+  }
+
+  const sourceFilterResult =
+    filterResult && typeof filterResult === "object"
+      ? filterResult
+      : getCurrentFilterResultSnapshot();
+  const sortRun = buildSortedIndicesForCurrentResult(
+    sourceFilterResult,
+    executionOptions
+  );
+  const renderIndices =
+    sortRun && hasIndexCollection(sortRun.indices)
+      ? sortRun.indices
+      : sourceFilterResult.filteredIndices;
+
+  return {
+    kind: "ok",
+    filterResult: sourceFilterResult,
+    sortRun,
+    renderIndices,
+  };
+}
+
+function renderSortUi(coreRun, options) {
+  const executionOptions = options || {};
+  const skipRender = executionOptions.skipRender === true;
+  const skipStatus = executionOptions.skipStatus === true;
+  const keepScroll = executionOptions.keepScroll !== false;
+  const wallStartMs = Number.isFinite(executionOptions.wallStartMs)
+    ? Number(executionOptions.wallStartMs)
+    : performance.now();
+
+  if (!coreRun || coreRun.kind === "no-sort-controller") {
     return null;
   }
 
-  const wallStartMs = performance.now();
-  const filterResult = getCurrentFilterResultSnapshot();
-  let sortRun = null;
-  let renderIndices = filterResult.filteredIndices;
-
-  sortRun = buildSortedIndicesForCurrentResult(filterResult);
-  if (sortRun && hasIndexCollection(sortRun.indices)) {
-    renderIndices = sortRun.indices;
+  if (coreRun.kind === "no-data") {
+    if (!skipStatus) {
+      setSortTelemetryStatus("No data loaded yet.");
+    }
+    return null;
   }
 
-  const renderStartMs = performance.now();
-  renderFilterResultByCurrentMode(filterResult, renderIndices, true);
-  const renderMs = performance.now() - renderStartMs;
+  const filterResult = coreRun.filterResult;
+  const sortRun = coreRun.sortRun;
+  const renderIndices = coreRun.renderIndices;
+
+  let renderMs = 0;
+  if (!skipRender) {
+    const renderStartMs = performance.now();
+    renderFilterResultByCurrentMode(filterResult, renderIndices, keepScroll);
+    renderMs = performance.now() - renderStartMs;
+    window.fastTableFilteredRows = null;
+    window.fastTableFilteredRowIndices = renderIndices;
+  }
+
   const wallMs = performance.now() - wallStartMs;
-  window.fastTableFilteredRows = null;
-  window.fastTableFilteredRowIndices = renderIndices;
   updateSortHeaderIndicators();
+
   if (!sortRun || !sortRun.result) {
-    setSortTelemetryStatus("No sort telemetry yet.");
+    if (!skipStatus) {
+      setSortTelemetryStatus("No sort telemetry yet.");
+    }
     return null;
   }
 
-  setSortTelemetryFromResult(
-    sortRun.result,
-    sortRun.sortedCount,
-    {
+  if (!skipStatus) {
+    setSortTelemetryFromResult(sortRun.result, sortRun.sortedCount, {
       sortTotalMs: sortRun.sortTotalMs,
       sortPrepMs: sortRun.sortPrepMs,
       rankBuildMs: sortRun.rankBuildMs,
       renderMs,
       wallMs,
-    }
-  );
+    });
+  }
   return sortRun.result;
+}
+
+function runSortFromCurrentUi(options) {
+  const executionOptions = options || {};
+  const wallStartMs = performance.now();
+  const sourceFilterResult =
+    executionOptions.filterResult || getCurrentFilterResultSnapshot();
+  const coreRun = runSortCore(sourceFilterResult, executionOptions);
+  return renderSortUi(
+    coreRun,
+    Object.assign({}, executionOptions, {
+      wallStartMs,
+    })
+  );
+}
+
+function applySortAndRender(options) {
+  return runSortFromCurrentUi(options);
 }
 
 function runSortInteraction(action, options) {
@@ -1350,7 +1405,6 @@ async function precomputeSortedIndicesWithWorkersForCurrentData() {
 }
 
 function invalidateDerivedData() {
-  clearPrecomputedGroupedSortCache();
   cachedObjectColumnarData = null;
   objectColumnarFilterController.setData(null);
 
@@ -1363,6 +1417,13 @@ function invalidateDerivedData() {
   window.fastTableColumnarData = null;
   window.fastTableNumericRows = null;
   window.fastTableNumericColumnarData = null;
+
+  if (
+    appSortRuntimeBridge &&
+    typeof appSortRuntimeBridge.resetPrecomputedSortState === "function"
+  ) {
+    appSortRuntimeBridge.resetPrecomputedSortState(getLoadedRowCount());
+  }
 }
 
 function getLoadedRowCount() {
@@ -1900,7 +1961,7 @@ function renderHeaderAndFilters() {
       sortButton.addEventListener("click", () => {
         runSortInteraction(() => {
           sortController.cycle(columnKeys[i]);
-          applySortAndRender();
+          runSortFromCurrentUi();
         }, { disableButtons: false });
       });
 
@@ -1980,2149 +2041,130 @@ function hasIndexCollection(indices) {
   return Array.isArray(indices) || ArrayBuffer.isView(indices);
 }
 
-function buildPrecomputedSortKeyColumns(indices, numericColumnarData, descriptors) {
-  if (
-    !numericColumnarData ||
-    !Array.isArray(numericColumnarData.columns) ||
-    numericColumnarData.columns.length < columnKeys.length
-  ) {
-    return null;
-  }
-
-  const descriptorList = Array.isArray(descriptors) ? descriptors : [];
-  const keyColumns = new Array(descriptorList.length);
-  const columns = numericColumnarData.columns;
-  const dictionaries = Array.isArray(numericColumnarData.dictionaries)
-    ? numericColumnarData.dictionaries
-    : [];
-
-  for (let d = 0; d < descriptorList.length; d += 1) {
-    const descriptor = descriptorList[d];
-    const columnKey =
-      descriptor && typeof descriptor.columnKey === "string"
-        ? descriptor.columnKey
-        : "";
-    const columnIndex = Number(columnIndexByKey[columnKey]);
-    if (!Number.isInteger(columnIndex) || columnIndex < 0) {
-      return null;
-    }
-    const columnValues = columns[columnIndex];
-    if (!columnValues || typeof columnValues.length !== "number") {
-      return null;
-    }
-    const valueType =
-      sortColumnTypeByKey && typeof columnKey === "string"
-        ? sortColumnTypeByKey[columnKey]
-        : "string";
-    const useNumericValues = valueType === "number";
-    const values = useNumericValues
-      ? new Float64Array(indices.length)
-      : new Array(indices.length);
-
-    for (let i = 0; i < indices.length; i += 1) {
-      const rowIndex = Number(indices[i]) >>> 0;
-      const rawValue = columnValues[rowIndex];
-      if (useNumericValues) {
-        if (rawValue === undefined || rawValue === null) {
-          values[i] = Number.NaN;
-        } else {
-          const numericValue = Number(rawValue);
-          values[i] = Number.isFinite(numericValue) ? numericValue : Number.NaN;
-        }
-      } else if (Array.isArray(dictionaries[columnIndex])) {
-        values[i] = dictionaries[columnIndex][rawValue];
-      } else {
-        values[i] = rawValue;
-      }
-    }
-
-    keyColumns[d] = values;
-  }
-
-  return keyColumns;
-}
-
-function buildPrecomputedSortRankColumns(descriptors, rowCount) {
-  const descriptorList = Array.isArray(descriptors) ? descriptors : [];
-  const expectedRowCount = Math.max(0, Number(rowCount) || 0);
-  if (descriptorList.length === 0 || expectedRowCount <= 0) {
-    return null;
-  }
-
-  let numericColumnarData =
-    isValidNumericColumnarData(cachedNumericColumnarData)
-      ? cachedNumericColumnarData
-      : null;
-  const hasReadyAscRanks =
-    numericColumnarData &&
-    ((numericColumnarData.sortedRankAscByKey &&
-      typeof numericColumnarData.sortedRankAscByKey === "object" &&
-      !Array.isArray(numericColumnarData.sortedRankAscByKey)) ||
-      (numericColumnarData.sortedRankByKey &&
-        typeof numericColumnarData.sortedRankByKey === "object" &&
-        !Array.isArray(numericColumnarData.sortedRankByKey)));
-  if (!hasReadyAscRanks) {
-    numericColumnarData = getNumericColumnarDataForPrecomputedSort();
-  }
-  if (!isValidNumericColumnarData(numericColumnarData)) {
-    return null;
-  }
-
-  const rankByKey =
-    numericColumnarData.sortedRankAscByKey &&
-    typeof numericColumnarData.sortedRankAscByKey === "object" &&
-    !Array.isArray(numericColumnarData.sortedRankAscByKey)
-      ? numericColumnarData.sortedRankAscByKey
-      : numericColumnarData.sortedRankByKey &&
-          typeof numericColumnarData.sortedRankByKey === "object" &&
-          !Array.isArray(numericColumnarData.sortedRankByKey)
-        ? numericColumnarData.sortedRankByKey
-        : Object.create(null);
-  const rankColumnsByColumn = Array.isArray(numericColumnarData.sortedRankAscColumns)
-    ? numericColumnarData.sortedRankAscColumns
-    : Array.isArray(numericColumnarData.sortedRankColumns)
-      ? numericColumnarData.sortedRankColumns
-      : [];
-
-  const descriptorRankColumns = new Array(descriptorList.length);
-  for (let i = 0; i < descriptorList.length; i += 1) {
-    const descriptor = descriptorList[i];
-    if (!descriptor || typeof descriptor.columnKey !== "string") {
-      return null;
-    }
-    let rankByRowId = rankByKey[descriptor.columnKey];
-    if (!isSupportedRankArray(rankByRowId)) {
-      const columnIndex = columnIndexByKey[descriptor.columnKey];
-      if (typeof columnIndex === "number" && columnIndex >= 0) {
-        rankByRowId = rankColumnsByColumn[columnIndex];
-      }
-    }
-    if (
-      !isSupportedRankArray(rankByRowId) ||
-      rankByRowId.length !== expectedRowCount
-    ) {
-      return null;
-    }
-
-    descriptorRankColumns[i] = rankByRowId;
-  }
-
-  return descriptorRankColumns;
-}
-
-function resolveSortModeForRun(sortModeOverride) {
-  if (typeof sortModeOverride === "string" && sortModeOverride !== "") {
-    return sortModeOverride;
-  }
-
-  return getSortMode();
-}
-
-function getNumericColumnarDataForPrecomputedSort() {
-  if (
-    cachedNumericColumnarData !== null &&
-    isValidNumericColumnarData(cachedNumericColumnarData)
-  ) {
-    cachedNumericColumnarData = ensureNumericColumnarSortedIndices(
-      cachedNumericColumnarData
-    );
-    const rankPrecompute = ensureNumericColumnarSortedRanks(
-      cachedNumericColumnarData
-    );
-    cachedNumericColumnarData = rankPrecompute.numericColumnarData;
-    return cachedNumericColumnarData;
-  }
-
-  if (getLoadedRowCount() === 0) {
-    return null;
-  }
-
-  const numericRowsBuild = getOrBuildNumericRows();
-  const numericColumnarBuild = getOrBuildNumericColumnarData(
-    numericRowsBuild.numericRows
+function buildSortSnapshotFromFilterResult(filterResult) {
+  const loadedRowCount = getLoadedRowCount();
+  const snapshotIndices = materializeFilteredIndexArray(
+    filterResult ? filterResult.filteredIndices : null,
+    loadedRowCount
   );
-  cachedNumericColumnarData = ensureNumericColumnarSortedIndices(
-    numericColumnarBuild.columnarData
-  );
-  const rankPrecompute = ensureNumericColumnarSortedRanks(
-    cachedNumericColumnarData
-  );
-  cachedNumericColumnarData = rankPrecompute.numericColumnarData;
-  return cachedNumericColumnarData;
-}
-
-function getPrecomputedSortedIndexForColumn(columnKey, rowCount) {
-  if (typeof columnKey !== "string" || columnKey === "") {
-    return null;
-  }
-
-  const numericColumnarData = getNumericColumnarDataForPrecomputedSort();
-  if (!isValidNumericColumnarData(numericColumnarData)) {
-    return null;
-  }
-
-  const expectedRowCount = Math.max(0, Number(rowCount) || 0);
-  const byKey = numericColumnarData.sortedIndexByKey;
-  if (byKey && typeof byKey === "object" && !Array.isArray(byKey)) {
-    const direct = byKey[columnKey];
-    if (direct instanceof Uint32Array && direct.length === expectedRowCount) {
-      return direct;
-    }
-  }
-
-  const colIndex = columnIndexByKey[columnKey];
-  if (typeof colIndex !== "number") {
-    return null;
-  }
-
-  const sortedColumns = Array.isArray(numericColumnarData.sortedIndexColumns)
-    ? numericColumnarData.sortedIndexColumns
-    : [];
-  const fromColumn = sortedColumns[colIndex];
-  if (fromColumn instanceof Uint32Array && fromColumn.length === expectedRowCount) {
-    return fromColumn;
-  }
-
-  return null;
-}
-
-function ensurePrecomputedSortScratch(rowCount) {
-  const count = Math.max(0, Number(rowCount) || 0);
-  if (
-    precomputedSortScratch.marks instanceof Uint32Array &&
-    precomputedSortScratch.output instanceof Uint32Array &&
-    precomputedSortScratch.work instanceof Uint32Array &&
-    precomputedSortScratch.counts instanceof Uint32Array &&
-    precomputedSortScratch.counts.length >= 256 &&
-    precomputedSortScratch.rowCount === count
-  ) {
-    return precomputedSortScratch;
-  }
-
-  precomputedSortScratch.rowCount = count;
-  precomputedSortScratch.marks = new Uint32Array(count);
-  precomputedSortScratch.output = new Uint32Array(count);
-  precomputedSortScratch.work = new Uint32Array(count);
-  precomputedSortScratch.counts = new Uint32Array(256);
-  precomputedSortScratch.epoch = 1;
-  return precomputedSortScratch;
-}
-
-function ensurePrecomputedGroupedSortScratch(rowCount) {
-  const count = Math.max(0, Number(rowCount) || 0);
-  if (
-    precomputedGroupedSortScratch.primary instanceof Uint32Array &&
-    precomputedGroupedSortScratch.secondary instanceof Uint32Array &&
-    precomputedGroupedSortScratch.counts instanceof Uint32Array &&
-    precomputedGroupedSortScratch.counts.length >= 256 &&
-    precomputedGroupedSortScratch.rowCount === count
-  ) {
-    return precomputedGroupedSortScratch;
-  }
-
-  precomputedGroupedSortScratch.rowCount = count;
-  precomputedGroupedSortScratch.primary = new Uint32Array(count);
-  precomputedGroupedSortScratch.secondary = new Uint32Array(count);
-  precomputedGroupedSortScratch.counts = new Uint32Array(256);
-  return precomputedGroupedSortScratch;
-}
-
-function nextPrecomputedSortEpoch(scratch) {
-  if (!scratch) {
-    return 1;
-  }
-
-  let nextEpoch = (scratch.epoch + 1) >>> 0;
-  if (nextEpoch === 0) {
-    scratch.marks.fill(0);
-    nextEpoch = 1;
-  }
-  scratch.epoch = nextEpoch;
-  return nextEpoch;
-}
-
-function getResolvedFilteredCount(filteredIndices, filteredCount, rowCount) {
-  const explicitCount = Number(filteredCount);
-  if (Number.isFinite(explicitCount) && explicitCount >= 0) {
-    return explicitCount | 0;
-  }
-
-  return Number(getFilteredIndicesCount(filteredIndices, rowCount)) | 0;
-}
-
-function materializeFilteredIndicesIntoUint32(
-  filteredIndices,
-  filteredCount,
-  rowCount,
-  target
-) {
-  const count = Math.max(0, Number(filteredCount) || 0);
-  if (!(target instanceof Uint32Array) || target.length < count) {
-    return null;
-  }
-
-  if (filteredIndices === null || filteredIndices === undefined) {
-    for (let i = 0; i < count; i += 1) {
-      target[i] = i;
-    }
-    return target.subarray(0, count);
-  }
-
-  if (
-    filteredIndices &&
-    ArrayBuffer.isView(filteredIndices.buffer) &&
-    typeof filteredIndices.count === "number"
-  ) {
-    const bufferView = filteredIndices.buffer;
-    for (let i = 0; i < count; i += 1) {
-      target[i] = bufferView[i] >>> 0;
-    }
-    return target.subarray(0, count);
-  }
-
-  if (Array.isArray(filteredIndices) || ArrayBuffer.isView(filteredIndices)) {
-    for (let i = 0; i < count; i += 1) {
-      target[i] = filteredIndices[i] >>> 0;
-    }
-    return target.subarray(0, count);
-  }
-
-  for (let i = 0; i < count; i += 1) {
-    target[i] = getFilteredIndexAt(filteredIndices, i) >>> 0;
-  }
-  return target.subarray(0, count);
-}
-
-function isFullSelectionForPrecomputedSort(
-  filteredIndices,
-  filteredCount,
-  rowCount
-) {
-  if (filteredIndices === null || filteredIndices === undefined) {
-    return true;
-  }
-
-  return getResolvedFilteredCount(filteredIndices, filteredCount, rowCount) === rowCount;
-}
-
-function shouldUseRankSortForPrecomputedSubset(filteredCount, rowCount) {
-  const subsetCount = Math.max(0, Number(filteredCount) || 0);
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  if (subsetCount <= 1 || totalRows <= 1 || subsetCount >= totalRows) {
-    return false;
-  }
-
-  const subsetLogCost = subsetCount * Math.log2(Math.max(2, subsetCount));
-  const scanCost = totalRows;
-  return subsetLogCost <= scanCost * 0.75;
-}
-
-function buildPrecomputedRankForColumn(columnKey, rowCount, direction) {
-  const expectedRowCount = Math.max(0, Number(rowCount) || 0);
-  const normalizedDirection = normalizeSortDirection(direction);
-  const numericColumnarData = getNumericColumnarDataForPrecomputedSort();
-  if (!isValidNumericColumnarData(numericColumnarData)) {
-    return null;
-  }
-
-  const rankByKey =
-    normalizedDirection === "asc"
-      ? numericColumnarData.sortedRankAscByKey &&
-        typeof numericColumnarData.sortedRankAscByKey === "object" &&
-        !Array.isArray(numericColumnarData.sortedRankAscByKey)
-        ? numericColumnarData.sortedRankAscByKey
-        : numericColumnarData.sortedRankByKey &&
-          typeof numericColumnarData.sortedRankByKey === "object" &&
-          !Array.isArray(numericColumnarData.sortedRankByKey)
-          ? numericColumnarData.sortedRankByKey
-          : Object.create(null)
-      : numericColumnarData.sortedRankDescByKey &&
-        typeof numericColumnarData.sortedRankDescByKey === "object" &&
-        !Array.isArray(numericColumnarData.sortedRankDescByKey)
-        ? numericColumnarData.sortedRankDescByKey
-      : Object.create(null);
-  const rankMaxByKey =
-    normalizedDirection === "asc"
-      ? numericColumnarData.sortedRankAscMaxByKey &&
-        typeof numericColumnarData.sortedRankAscMaxByKey === "object" &&
-        !Array.isArray(numericColumnarData.sortedRankAscMaxByKey)
-        ? numericColumnarData.sortedRankAscMaxByKey
-        : numericColumnarData.sortedRankMaxByKey &&
-          typeof numericColumnarData.sortedRankMaxByKey === "object" &&
-          !Array.isArray(numericColumnarData.sortedRankMaxByKey)
-          ? numericColumnarData.sortedRankMaxByKey
-          : Object.create(null)
-      : numericColumnarData.sortedRankDescMaxByKey &&
-        typeof numericColumnarData.sortedRankDescMaxByKey === "object" &&
-        !Array.isArray(numericColumnarData.sortedRankDescMaxByKey)
-        ? numericColumnarData.sortedRankDescMaxByKey
-      : Object.create(null);
-  const existingByKey = rankByKey[columnKey];
-  if (isSupportedRankArray(existingByKey) && existingByKey.length === expectedRowCount) {
-    return {
-      rankByRowId: existingByKey,
-      durationMs: 0,
-      maxRank: Number(rankMaxByKey[columnKey]) >>> 0,
-    };
-  }
-
-  const columnIndex = columnIndexByKey[columnKey];
-  if (typeof columnIndex !== "number" || columnIndex < 0) {
-    return null;
-  }
-
-  const existingRankColumns =
-    normalizedDirection === "asc"
-      ? Array.isArray(numericColumnarData.sortedRankAscColumns)
-        ? numericColumnarData.sortedRankAscColumns
-        : Array.isArray(numericColumnarData.sortedRankColumns)
-          ? numericColumnarData.sortedRankColumns
-          : []
-      : Array.isArray(numericColumnarData.sortedRankDescColumns)
-        ? numericColumnarData.sortedRankDescColumns
-    : [];
-  const existingRankMaxColumns =
-    normalizedDirection === "asc"
-      ? Array.isArray(numericColumnarData.sortedRankAscMaxColumns)
-        ? numericColumnarData.sortedRankAscMaxColumns
-        : Array.isArray(numericColumnarData.sortedRankMaxColumns)
-          ? numericColumnarData.sortedRankMaxColumns
-          : []
-      : Array.isArray(numericColumnarData.sortedRankDescMaxColumns)
-        ? numericColumnarData.sortedRankDescMaxColumns
-    : [];
-  const existingByColumn = existingRankColumns[columnIndex];
-  if (
-    isSupportedRankArray(existingByColumn) &&
-    existingByColumn.length === expectedRowCount
-  ) {
-    const maxRank = Number(existingRankMaxColumns[columnIndex]) >>> 0;
-    rankByKey[columnKey] = existingByColumn;
-    rankMaxByKey[columnKey] = maxRank;
-    if (normalizedDirection === "asc") {
-      numericColumnarData.sortedRankAscByKey = rankByKey;
-      numericColumnarData.sortedRankAscMaxByKey = rankMaxByKey;
-    } else {
-      numericColumnarData.sortedRankDescByKey = rankByKey;
-      numericColumnarData.sortedRankDescMaxByKey = rankMaxByKey;
-    }
-    return {
-      rankByRowId: existingByColumn,
-      durationMs: 0,
-      maxRank,
-    };
-  }
-  return null;
-}
-
-function buildPrecomputedDescAllIndices(sortedColumnIndices, rowCount) {
-  if (!(sortedColumnIndices instanceof Uint32Array)) {
-    return null;
-  }
-
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  if (sortedColumnIndices.length !== totalRows) {
-    return null;
-  }
-
-  const scratch = ensurePrecomputedSortScratch(totalRows);
-  const output = scratch.output;
-  for (let i = 0; i < totalRows; i += 1) {
-    output[i] = sortedColumnIndices[totalRows - 1 - i];
-  }
-
-  return output.subarray(0, totalRows);
-}
-
-function buildSortedIndicesFromPrecomputedScan(
-  filteredIndices,
-  filteredCount,
-  sortedColumnIndices,
-  direction,
-  rowCount
-) {
-  if (!(sortedColumnIndices instanceof Uint32Array)) {
-    return null;
-  }
-
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  if (sortedColumnIndices.length !== totalRows) {
-    return null;
-  }
-
-  const count = getResolvedFilteredCount(filteredIndices, filteredCount, totalRows);
-  if (count <= 0) {
-    return new Uint32Array(0);
-  }
-
-  if (isFullSelectionForPrecomputedSort(filteredIndices, count, totalRows)) {
-    if (direction === "desc") {
-      return buildPrecomputedDescAllIndices(sortedColumnIndices, totalRows);
-    }
-
-    return sortedColumnIndices;
-  }
-
-  const scratch = ensurePrecomputedSortScratch(totalRows);
-  const marks = scratch.marks;
-  const output = scratch.output;
-  const epoch = nextPrecomputedSortEpoch(scratch);
-  const subset = materializeFilteredIndicesIntoUint32(
-    filteredIndices,
-    count,
-    totalRows,
-    scratch.work
-  );
-  if (!(subset instanceof Uint32Array)) {
-    return null;
-  }
-
-  for (let i = 0; i < subset.length; i += 1) {
-    marks[subset[i]] = epoch;
-  }
-
-  let writeIndex = 0;
-  if (direction === "desc") {
-    for (let i = totalRows - 1; i >= 0; i -= 1) {
-      const rowIndex = sortedColumnIndices[i];
-      if (marks[rowIndex] === epoch) {
-        output[writeIndex] = rowIndex;
-        writeIndex += 1;
-        if (writeIndex === subset.length) {
-          break;
-        }
-      }
-    }
-  } else {
-    for (let i = 0; i < totalRows; i += 1) {
-      const rowIndex = sortedColumnIndices[i];
-      if (marks[rowIndex] === epoch) {
-        output[writeIndex] = rowIndex;
-        writeIndex += 1;
-        if (writeIndex === subset.length) {
-          break;
-        }
-      }
-    }
-  }
-
-  return output.subarray(0, writeIndex);
-}
-
-function stableRadixSortRowIdsByUint32Key(
-  rowIds,
-  keyByRowId,
-  descending,
-  tempBuffer,
-  countsBuffer,
-  keyMaxValueOverride
-) {
-  if (!(rowIds instanceof Uint32Array)) {
-    return false;
-  }
-
-  const length = rowIds.length;
-  if (length <= 1) {
-    return true;
-  }
-
-  if (!(tempBuffer instanceof Uint32Array) || tempBuffer.length < length) {
-    return false;
-  }
-
-  const counts =
-    countsBuffer instanceof Uint32Array && countsBuffer.length >= 256
-      ? countsBuffer
-      : new Uint32Array(256);
-  const hasKeyByRowId =
-    Array.isArray(keyByRowId) || ArrayBuffer.isView(keyByRowId);
-  let keyMaxValue = Number.isFinite(keyMaxValueOverride)
-    ? Math.max(0, keyMaxValueOverride >>> 0)
-    : 0;
-  if (!Number.isFinite(keyMaxValueOverride)) {
-    if (hasKeyByRowId) {
-      for (let i = 0; i < length; i += 1) {
-        const rowId = rowIds[i] >>> 0;
-        const key = keyByRowId[rowId] >>> 0;
-        if (key > keyMaxValue) {
-          keyMaxValue = key;
-        }
-      }
-    } else {
-      for (let i = 0; i < length; i += 1) {
-        const rowId = rowIds[i] >>> 0;
-        if (rowId > keyMaxValue) {
-          keyMaxValue = rowId;
-        }
-      }
-    }
-  }
-  let passCount = 1;
-  if (keyMaxValue > 0xff) {
-    passCount = 2;
-  }
-  if (keyMaxValue > 0xffff) {
-    passCount = 3;
-  }
-  if (keyMaxValue > 0xffffff) {
-    passCount = 4;
-  }
-  let source = rowIds;
-  let target = tempBuffer.subarray(0, length);
-
-  if (hasKeyByRowId) {
-    if (descending) {
-      for (let pass = 0; pass < passCount; pass += 1) {
-        const shift = pass * 8;
-        counts.fill(0);
-
-        for (let i = 0; i < length; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (((keyMaxValue - key) >>> 0) >>> shift) & 0xff;
-          counts[digit] += 1;
-        }
-
-        let prefix = 0;
-        for (let d = 0; d < 256; d += 1) {
-          const bucketSize = counts[d];
-          counts[d] = prefix;
-          prefix += bucketSize;
-        }
-
-        for (let i = 0; i < length; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (((keyMaxValue - key) >>> 0) >>> shift) & 0xff;
-          const outIndex = counts[digit];
-          target[outIndex] = rowId;
-          counts[digit] = outIndex + 1;
-        }
-
-        const previousSource = source;
-        source = target;
-        target = previousSource;
-      }
-    } else {
-      for (let pass = 0; pass < passCount; pass += 1) {
-        const shift = pass * 8;
-        counts.fill(0);
-
-        for (let i = 0; i < length; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (key >>> shift) & 0xff;
-          counts[digit] += 1;
-        }
-
-        let prefix = 0;
-        for (let d = 0; d < 256; d += 1) {
-          const bucketSize = counts[d];
-          counts[d] = prefix;
-          prefix += bucketSize;
-        }
-
-        for (let i = 0; i < length; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (key >>> shift) & 0xff;
-          const outIndex = counts[digit];
-          target[outIndex] = rowId;
-          counts[digit] = outIndex + 1;
-        }
-
-        const previousSource = source;
-        source = target;
-        target = previousSource;
-      }
-    }
-  } else if (descending) {
-    for (let pass = 0; pass < passCount; pass += 1) {
-      const shift = pass * 8;
-      counts.fill(0);
-
-      for (let i = 0; i < length; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (((keyMaxValue - rowId) >>> 0) >>> shift) & 0xff;
-        counts[digit] += 1;
-      }
-
-      let prefix = 0;
-      for (let d = 0; d < 256; d += 1) {
-        const bucketSize = counts[d];
-        counts[d] = prefix;
-        prefix += bucketSize;
-      }
-
-      for (let i = 0; i < length; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (((keyMaxValue - rowId) >>> 0) >>> shift) & 0xff;
-        const outIndex = counts[digit];
-        target[outIndex] = rowId;
-        counts[digit] = outIndex + 1;
-      }
-
-      const previousSource = source;
-      source = target;
-      target = previousSource;
-    }
-  } else {
-    for (let pass = 0; pass < passCount; pass += 1) {
-      const shift = pass * 8;
-      counts.fill(0);
-
-      for (let i = 0; i < length; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (rowId >>> shift) & 0xff;
-        counts[digit] += 1;
-      }
-
-      let prefix = 0;
-      for (let d = 0; d < 256; d += 1) {
-        const bucketSize = counts[d];
-        counts[d] = prefix;
-        prefix += bucketSize;
-      }
-
-      for (let i = 0; i < length; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (rowId >>> shift) & 0xff;
-        const outIndex = counts[digit];
-        target[outIndex] = rowId;
-        counts[digit] = outIndex + 1;
-      }
-
-      const previousSource = source;
-      source = target;
-      target = previousSource;
-    }
-  }
-
-  if (source !== rowIds) {
-    rowIds.set(source);
-  }
-
-  return true;
-}
-
-function stableRadixSortRowIdsRangeByUint32Key(
-  rowIds,
-  start,
-  end,
-  keyByRowId,
-  descending,
-  tempBuffer,
-  countsBuffer,
-  keyMaxValueOverride
-) {
-  if (!(rowIds instanceof Uint32Array) || !(tempBuffer instanceof Uint32Array)) {
-    return false;
-  }
-
-  const startIndex = Math.max(0, Number(start) | 0);
-  const endIndex = Math.min(rowIds.length, Number(end) | 0);
-  const length = endIndex - startIndex;
-  if (length <= 1) {
-    return true;
-  }
-
-  if (tempBuffer.length < rowIds.length) {
-    return false;
-  }
-
-  const counts =
-    countsBuffer instanceof Uint32Array && countsBuffer.length >= 256
-      ? countsBuffer
-      : new Uint32Array(256);
-  const hasKeyByRowId =
-    Array.isArray(keyByRowId) || ArrayBuffer.isView(keyByRowId);
-  let keyMaxValue = Number.isFinite(keyMaxValueOverride)
-    ? Math.max(0, keyMaxValueOverride >>> 0)
-    : 0;
-  if (!Number.isFinite(keyMaxValueOverride)) {
-    if (hasKeyByRowId) {
-      for (let i = startIndex; i < endIndex; i += 1) {
-        const rowId = rowIds[i] >>> 0;
-        const key = keyByRowId[rowId] >>> 0;
-        if (key > keyMaxValue) {
-          keyMaxValue = key;
-        }
-      }
-    } else {
-      for (let i = startIndex; i < endIndex; i += 1) {
-        const rowId = rowIds[i] >>> 0;
-        if (rowId > keyMaxValue) {
-          keyMaxValue = rowId;
-        }
-      }
-    }
-  }
-
-  let passCount = 1;
-  if (keyMaxValue > 0xff) {
-    passCount = 2;
-  }
-  if (keyMaxValue > 0xffff) {
-    passCount = 3;
-  }
-  if (keyMaxValue > 0xffffff) {
-    passCount = 4;
-  }
-
-  let source = rowIds;
-  let target = tempBuffer;
-
-  if (hasKeyByRowId) {
-    if (descending) {
-      for (let pass = 0; pass < passCount; pass += 1) {
-        const shift = pass * 8;
-        counts.fill(0);
-
-        for (let i = startIndex; i < endIndex; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (((keyMaxValue - key) >>> 0) >>> shift) & 0xff;
-          counts[digit] += 1;
-        }
-
-        let prefix = startIndex;
-        for (let d = 0; d < 256; d += 1) {
-          const bucketSize = counts[d];
-          counts[d] = prefix;
-          prefix += bucketSize;
-        }
-
-        for (let i = startIndex; i < endIndex; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (((keyMaxValue - key) >>> 0) >>> shift) & 0xff;
-          const outIndex = counts[digit];
-          target[outIndex] = rowId;
-          counts[digit] = outIndex + 1;
-        }
-
-        const previousSource = source;
-        source = target;
-        target = previousSource;
-      }
-    } else {
-      for (let pass = 0; pass < passCount; pass += 1) {
-        const shift = pass * 8;
-        counts.fill(0);
-
-        for (let i = startIndex; i < endIndex; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (key >>> shift) & 0xff;
-          counts[digit] += 1;
-        }
-
-        let prefix = startIndex;
-        for (let d = 0; d < 256; d += 1) {
-          const bucketSize = counts[d];
-          counts[d] = prefix;
-          prefix += bucketSize;
-        }
-
-        for (let i = startIndex; i < endIndex; i += 1) {
-          const rowId = source[i] >>> 0;
-          const key = keyByRowId[rowId] >>> 0;
-          const digit = (key >>> shift) & 0xff;
-          const outIndex = counts[digit];
-          target[outIndex] = rowId;
-          counts[digit] = outIndex + 1;
-        }
-
-        const previousSource = source;
-        source = target;
-        target = previousSource;
-      }
-    }
-  } else if (descending) {
-    for (let pass = 0; pass < passCount; pass += 1) {
-      const shift = pass * 8;
-      counts.fill(0);
-
-      for (let i = startIndex; i < endIndex; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (((keyMaxValue - rowId) >>> 0) >>> shift) & 0xff;
-        counts[digit] += 1;
-      }
-
-      let prefix = startIndex;
-      for (let d = 0; d < 256; d += 1) {
-        const bucketSize = counts[d];
-        counts[d] = prefix;
-        prefix += bucketSize;
-      }
-
-      for (let i = startIndex; i < endIndex; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (((keyMaxValue - rowId) >>> 0) >>> shift) & 0xff;
-        const outIndex = counts[digit];
-        target[outIndex] = rowId;
-        counts[digit] = outIndex + 1;
-      }
-
-      const previousSource = source;
-      source = target;
-      target = previousSource;
-    }
-  } else {
-    for (let pass = 0; pass < passCount; pass += 1) {
-      const shift = pass * 8;
-      counts.fill(0);
-
-      for (let i = startIndex; i < endIndex; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (rowId >>> shift) & 0xff;
-        counts[digit] += 1;
-      }
-
-      let prefix = startIndex;
-      for (let d = 0; d < 256; d += 1) {
-        const bucketSize = counts[d];
-        counts[d] = prefix;
-        prefix += bucketSize;
-      }
-
-      for (let i = startIndex; i < endIndex; i += 1) {
-        const rowId = source[i] >>> 0;
-        const digit = (rowId >>> shift) & 0xff;
-        const outIndex = counts[digit];
-        target[outIndex] = rowId;
-        counts[digit] = outIndex + 1;
-      }
-
-      const previousSource = source;
-      source = target;
-      target = previousSource;
-    }
-  }
-
-  if (source !== rowIds) {
-    rowIds.set(source.subarray(startIndex, endIndex), startIndex);
-  }
-
-  return true;
-}
-
-function isMonotonicRowIdsForDirection(rowIds, descending) {
-  if (!(rowIds instanceof Uint32Array)) {
-    return false;
-  }
-
-  const length = rowIds.length;
-  if (length <= 1) {
-    return true;
-  }
-
-  if (descending) {
-    for (let i = 1; i < length; i += 1) {
-      if (rowIds[i - 1] < rowIds[i]) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  for (let i = 1; i < length; i += 1) {
-    if (rowIds[i - 1] > rowIds[i]) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function isRowIdRangeOrderedByUint32Key(
-  rowIds,
-  start,
-  end,
-  keyByRowId,
-  descending
-) {
-  if (!(rowIds instanceof Uint32Array)) {
-    return false;
-  }
-
-  const startIndex = Math.max(0, Number(start) | 0);
-  const endIndex = Math.min(rowIds.length, Number(end) | 0);
-  if (endIndex - startIndex <= 1) {
-    return true;
-  }
-
-  let previousRowId = rowIds[startIndex] >>> 0;
-  let previousKey = keyByRowId
-    ? keyByRowId[previousRowId] >>> 0
-    : previousRowId;
-  for (let i = startIndex + 1; i < endIndex; i += 1) {
-    const rowId = rowIds[i] >>> 0;
-    const nextKey = keyByRowId ? keyByRowId[rowId] >>> 0 : rowId;
-    if (descending ? previousKey < nextKey : previousKey > nextKey) {
-      return false;
-    }
-    previousKey = nextKey;
-  }
-
-  return true;
-}
-
-function collectEqualRankSubgroups(
-  rowIds,
-  start,
-  end,
-  rankByRowId,
-  outStarts,
-  outEnds
-) {
-  if (
-    !(rowIds instanceof Uint32Array) ||
-    !isSupportedRankArray(rankByRowId) ||
-    !Array.isArray(outStarts) ||
-    !Array.isArray(outEnds)
-  ) {
-    return;
-  }
-
-  const startIndex = Math.max(0, Number(start) | 0);
-  const endIndex = Math.min(rowIds.length, Number(end) | 0);
-  if (endIndex - startIndex <= 1) {
-    return;
-  }
-
-  let segmentStart = startIndex;
-  let segmentRank = rankByRowId[rowIds[startIndex] >>> 0] >>> 0;
-  for (let i = startIndex + 1; i <= endIndex; i += 1) {
-    const atEnd = i === endIndex;
-    const nextRank = atEnd ? -1 : rankByRowId[rowIds[i] >>> 0] >>> 0;
-    if (atEnd || nextRank !== segmentRank) {
-      if (i - segmentStart > 1) {
-        outStarts.push(segmentStart);
-        outEnds.push(i);
-      }
-      segmentStart = i;
-      segmentRank = nextRank;
-    }
-  }
-}
-
-function getCachedPrecomputedGroupedPrefixState(descriptorList, rowCount) {
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  const cache = precomputedGroupedSortCache;
-  if (
-    !cache ||
-    cache.rowCount !== totalRows ||
-    !(cache.sortedOrder instanceof Uint32Array) ||
-    cache.sortedOrder.length !== totalRows
-  ) {
-    return null;
-  }
-
-  const cachedDescriptors = Array.isArray(cache.descriptors) ? cache.descriptors : [];
-  const matchLength = getMatchingSortDescriptorPrefixLength(
-    descriptorList,
-    cachedDescriptors
-  );
-  if (matchLength <= 0) {
-    return null;
-  }
-
-  let groupStarts = null;
-  let groupEnds = null;
-  if (matchLength < descriptorList.length) {
-    const startsByLength =
-      cache.prefixStartsByLength &&
-      typeof cache.prefixStartsByLength === "object" &&
-      !Array.isArray(cache.prefixStartsByLength)
-        ? cache.prefixStartsByLength
-        : null;
-    const endsByLength =
-      cache.prefixEndsByLength &&
-      typeof cache.prefixEndsByLength === "object" &&
-      !Array.isArray(cache.prefixEndsByLength)
-        ? cache.prefixEndsByLength
-        : null;
-    const starts = startsByLength ? startsByLength[matchLength] : null;
-    const ends = endsByLength ? endsByLength[matchLength] : null;
-    if (!Array.isArray(starts) || !Array.isArray(ends) || starts.length !== ends.length) {
-      return null;
-    }
-    groupStarts = starts.slice();
-    groupEnds = ends.slice();
-  }
-
   return {
-    sortedOrder: cache.sortedOrder,
-    matchLength,
-    groupStarts,
-    groupEnds,
-  };
-}
-
-function hasReusablePrecomputedGroupedPrefix(descriptorList, rowCount) {
-  const cachedState = getCachedPrecomputedGroupedPrefixState(
-    descriptorList,
-    rowCount
-  );
-  return !!(cachedState && cachedState.matchLength > 0);
-}
-
-function updatePrecomputedGroupedSortCache(
-  rowCount,
-  descriptorList,
-  sortedIndices,
-  prefixStartsByLength,
-  prefixEndsByLength
-) {
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  if (!(sortedIndices instanceof Uint32Array) || sortedIndices.length !== totalRows) {
-    clearPrecomputedGroupedSortCache();
-    return;
-  }
-
-  const normalizedDescriptors = normalizeSortDescriptorList(descriptorList);
-
-  const startsByLength = Object.create(null);
-  const endsByLength = Object.create(null);
-  for (let len = 1; len <= normalizedDescriptors.length; len += 1) {
-    const starts = prefixStartsByLength ? prefixStartsByLength[len] : null;
-    const ends = prefixEndsByLength ? prefixEndsByLength[len] : null;
-    if (!Array.isArray(starts) || !Array.isArray(ends) || starts.length !== ends.length) {
-      continue;
-    }
-
-    startsByLength[len] = starts.slice();
-    endsByLength[len] = ends.slice();
-  }
-
-  precomputedGroupedSortCache.rowCount = totalRows;
-  precomputedGroupedSortCache.descriptors = normalizedDescriptors;
-  precomputedGroupedSortCache.sortedOrder = sortedIndices;
-  precomputedGroupedSortCache.prefixStartsByLength = startsByLength;
-  precomputedGroupedSortCache.prefixEndsByLength = endsByLength;
-}
-
-function updatePrecomputedSubsetSortCache(
-  rowCount,
-  descriptorList,
-  sortedIndices,
-  sortedCount
-) {
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  const count = Math.max(0, Number(sortedCount) || 0);
-  if (!hasIndexCollection(sortedIndices) || count > sortedIndices.length) {
-    precomputedSubsetSortCache.rowCount = 0;
-    precomputedSubsetSortCache.descriptors = [];
-    precomputedSubsetSortCache.sortedOrder = null;
-    precomputedSubsetSortCache.sortedCount = 0;
-    return;
-  }
-
-  precomputedSubsetSortCache.rowCount = totalRows;
-  precomputedSubsetSortCache.descriptors = normalizeSortDescriptorList(descriptorList);
-  precomputedSubsetSortCache.sortedOrder = sortedIndices;
-  precomputedSubsetSortCache.sortedCount = count;
-}
-
-function tryReusePrecomputedSubsetSort(
-  filteredIndices,
-  filteredCount,
-  descriptorList,
-  rowCount
-) {
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  const count = getResolvedFilteredCount(filteredIndices, filteredCount, totalRows);
-  if (count <= 0) {
-    return {
-      sortResult: {
-        changedOrder: false,
-        durationMs: 0,
-        sortMode: "precomputed",
-        dataPath: "indices+precomputed-subset-reuse",
-        descriptors: descriptorList,
-        effectiveDescriptors: descriptorList,
-        restoredDefault: false,
-      },
-      sortedIndices: new Uint32Array(0),
-      rankBuildMs: 0,
-    };
-  }
-
-  const cachedRowCount = Math.max(0, Number(precomputedSubsetSortCache.rowCount) || 0);
-  if (cachedRowCount !== totalRows) {
-    return null;
-  }
-
-  if (
-    !areSortDescriptorListsEqual(
-      descriptorList,
-      precomputedSubsetSortCache.descriptors
-    )
-  ) {
-    return null;
-  }
-
-  const cachedSortedOrder = precomputedSubsetSortCache.sortedOrder;
-  const cachedSortedCount = Math.max(
-    0,
-    Number(precomputedSubsetSortCache.sortedCount) || 0
-  );
-  if (
-    !hasIndexCollection(cachedSortedOrder) ||
-    cachedSortedCount <= 0 ||
-    cachedSortedCount > cachedSortedOrder.length
-  ) {
-    return null;
-  }
-  if (count > cachedSortedCount) {
-    return null;
-  }
-
-  const startMs = performance.now();
-  const scratch = ensurePrecomputedSortScratch(totalRows);
-  const marks = scratch.marks;
-  const sourceSubset = materializeFilteredIndicesIntoUint32(
-    filteredIndices,
-    count,
-    totalRows,
-    scratch.work
-  );
-  if (!(sourceSubset instanceof Uint32Array)) {
-    return null;
-  }
-
-  const cachedEpoch = nextPrecomputedSortEpoch(scratch);
-  for (let i = 0; i < cachedSortedCount; i += 1) {
-    const rowId = cachedSortedOrder[i] >>> 0;
-    if (rowId >= totalRows) {
-      return null;
-    }
-    marks[rowId] = cachedEpoch;
-  }
-
-  for (let i = 0; i < sourceSubset.length; i += 1) {
-    const rowId = sourceSubset[i] >>> 0;
-    if (rowId >= totalRows || marks[rowId] !== cachedEpoch) {
-      return null;
-    }
-  }
-
-  const keepEpoch = nextPrecomputedSortEpoch(scratch);
-  for (let i = 0; i < sourceSubset.length; i += 1) {
-    marks[sourceSubset[i] >>> 0] = keepEpoch;
-  }
-
-  const output = scratch.output;
-  let writeIndex = 0;
-  for (let i = 0; i < cachedSortedCount; i += 1) {
-    const rowId = cachedSortedOrder[i] >>> 0;
-    if (marks[rowId] === keepEpoch) {
-      output[writeIndex] = rowId;
-      writeIndex += 1;
-      if (writeIndex === sourceSubset.length) {
-        break;
-      }
-    }
-  }
-
-  if (writeIndex !== sourceSubset.length) {
-    return null;
-  }
-
-  return {
-    sortResult: {
-      changedOrder: sourceSubset.length > 1,
-      durationMs: performance.now() - startMs,
-      sortMode: "precomputed",
-      dataPath: "indices+precomputed-subset-reuse",
-      descriptors: descriptorList,
-      effectiveDescriptors: descriptorList,
-      restoredDefault: false,
-    },
-    sortedIndices: output.subarray(0, sourceSubset.length),
-    rankBuildMs: 0,
-  };
-}
-
-function buildSortedIndicesFromPrecomputedRanks(
-  filteredIndices,
-  filteredCount,
-  rankByRowId,
-  rowCount,
-  rankMaxHint
-) {
-  if (!isSupportedRankArray(rankByRowId)) {
-    return null;
-  }
-
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  const count = getResolvedFilteredCount(filteredIndices, filteredCount, totalRows);
-  if (count <= 0) {
-    return new Uint32Array(0);
-  }
-
-  const scratch = ensurePrecomputedSortScratch(totalRows);
-  const subset = materializeFilteredIndicesIntoUint32(
-    filteredIndices,
-    count,
-    totalRows,
-    scratch.work
-  );
-  if (!(subset instanceof Uint32Array)) {
-    return null;
-  }
-
-  const tempBuffer = scratch.output;
-  const counts = scratch.counts;
-  if (!isMonotonicRowIdsForDirection(subset, false)) {
-    const sortedByRowId = stableRadixSortRowIdsByUint32Key(
-      subset,
-      null,
-      false,
-      tempBuffer,
-      counts,
-      Math.max(0, totalRows - 1)
-    );
-    if (!sortedByRowId) {
-      return null;
-    }
-  }
-
-  let rankMaxValue = Number.isFinite(rankMaxHint)
-    ? Math.max(0, Number(rankMaxHint)) >>> 0
-    : 0;
-  if (!Number.isFinite(rankMaxHint)) {
-    for (let i = 0; i < subset.length; i += 1) {
-      const rank = rankByRowId[subset[i]] >>> 0;
-      if (rank > rankMaxValue) {
-        rankMaxValue = rank;
-      }
-    }
-  }
-  const descending = false;
-  if (
-    subset.length <= PRECOMPUTED_ORDER_CHECK_MAX_GROUP_SIZE &&
-    isRowIdRangeOrderedByUint32Key(
-      subset,
-      0,
-      subset.length,
-      rankByRowId,
-      descending
-    )
-  ) {
-    return subset;
-  }
-  const sortedByRank = stableRadixSortRowIdsByUint32Key(
-    subset,
-    rankByRowId,
-    descending,
-    tempBuffer,
-    counts,
-    rankMaxValue
-  );
-  if (!sortedByRank) {
-    return null;
-  }
-
-  return subset;
-}
-
-function buildSortedIndicesViaPrecomputedRankTupleMode(
-  filteredIndices,
-  filteredCount,
-  descriptorList,
-  rowCount
-) {
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  const count = getResolvedFilteredCount(filteredIndices, filteredCount, totalRows);
-  if (count <= 0) {
-    return {
-      sortResult: {
-        changedOrder: false,
-        durationMs: 0,
-        sortMode: "precomputed",
-        dataPath: "indices+precomputed-ranktuple",
-        descriptors: descriptorList,
-        effectiveDescriptors: descriptorList,
-        restoredDefault: false,
-      },
-      sortedIndices: new Uint32Array(0),
-      rankBuildMs: 0,
-    };
-  }
-
-  const rankColumns = new Array(descriptorList.length);
-  const rankMaxByColumn = new Uint32Array(descriptorList.length);
-  let rankBuildMs = 0;
-  for (let i = 0; i < descriptorList.length; i += 1) {
-    const descriptor = descriptorList[i];
-    const rankBuild = buildPrecomputedRankForColumn(
-      descriptor.columnKey,
-      totalRows,
-      descriptor.direction
-    );
-    if (
-      !rankBuild ||
-      !isSupportedRankArray(rankBuild.rankByRowId) ||
-      rankBuild.rankByRowId.length !== totalRows
-    ) {
-      return null;
-    }
-
-    rankColumns[i] = rankBuild.rankByRowId;
-    rankMaxByColumn[i] = Number(rankBuild.maxRank) >>> 0;
-    rankBuildMs += Number(rankBuild.durationMs) || 0;
-  }
-
-  const scratch = ensurePrecomputedSortScratch(totalRows);
-  const subset = materializeFilteredIndicesIntoUint32(
-    filteredIndices,
-    count,
-    totalRows,
-    scratch.work
-  );
-  if (!(subset instanceof Uint32Array)) {
-    return null;
-  }
-
-  const sortStartMs = performance.now();
-  const tempBuffer = scratch.output;
-  const counts = scratch.counts;
-  if (!isMonotonicRowIdsForDirection(subset, false)) {
-    const sortedByRowId = stableRadixSortRowIdsByUint32Key(
-      subset,
-      null,
-      false,
-      tempBuffer,
-      counts,
-      Math.max(0, totalRows - 1)
-    );
-    if (!sortedByRowId) {
-      return null;
-    }
-  }
-
-  for (let i = descriptorList.length - 1; i >= 0; i -= 1) {
-    const rankByRowId = rankColumns[i];
-    if (
-      subset.length <= PRECOMPUTED_ORDER_CHECK_MAX_GROUP_SIZE &&
-      isRowIdRangeOrderedByUint32Key(
-        subset,
-        0,
-        subset.length,
-        rankByRowId,
-        false
-      )
-    ) {
-      continue;
-    }
-    const sortedPass = stableRadixSortRowIdsByUint32Key(
-      subset,
-      rankByRowId,
-      false,
-      tempBuffer,
-      counts,
-      rankMaxByColumn[i]
-    );
-    if (!sortedPass) {
-      return null;
-    }
-  }
-
-  const sortCoreMs = performance.now() - sortStartMs;
-
-  return {
-    sortResult: {
-      changedOrder: subset.length > 1,
-      durationMs: sortCoreMs,
-      sortMode: "precomputed",
-      dataPath: "indices+precomputed-ranktuple",
-      descriptors: descriptorList,
-      effectiveDescriptors: descriptorList,
-      restoredDefault: false,
-    },
-    sortedIndices: subset,
-    rankBuildMs,
-  };
-}
-
-function buildSortedIndicesViaPrecomputedGroupedFullMode(
-  descriptorList,
-  rowCount
-) {
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  if (totalRows <= 0) {
-    return {
-      sortResult: {
-        changedOrder: false,
-        durationMs: 0,
-        sortMode: "precomputed",
-        dataPath: "indices+precomputed-groups",
-        descriptors: descriptorList,
-        effectiveDescriptors: descriptorList,
-        restoredDefault: false,
-      },
-      sortedIndices: new Uint32Array(0),
-      rankBuildMs: 0,
-    };
-  }
-
-  if (!Array.isArray(descriptorList) || descriptorList.length <= 1) {
-    return null;
-  }
-
-  const rankColumns = new Array(descriptorList.length);
-  const rankMaxByColumn = new Uint32Array(descriptorList.length);
-  let rankBuildMs = 0;
-  for (let i = 0; i < descriptorList.length; i += 1) {
-    const descriptor = descriptorList[i];
-    const rankBuild = buildPrecomputedRankForColumn(
-      descriptor.columnKey,
-      totalRows,
-      descriptor.direction
-    );
-    if (
-      !rankBuild ||
-      !isSupportedRankArray(rankBuild.rankByRowId) ||
-      rankBuild.rankByRowId.length !== totalRows
-    ) {
-      return null;
-    }
-
-    rankColumns[i] = rankBuild.rankByRowId;
-    rankMaxByColumn[i] = Number(rankBuild.maxRank) >>> 0;
-    rankBuildMs += Number(rankBuild.durationMs) || 0;
-  }
-
-  const cachedPrefixState = getCachedPrecomputedGroupedPrefixState(
-    descriptorList,
-    totalRows
-  );
-  if (
-    cachedPrefixState &&
-    cachedPrefixState.matchLength === descriptorList.length
-  ) {
-    return {
-      sortResult: {
-        changedOrder: totalRows > 1,
-        durationMs: 0,
-        sortMode: "precomputed",
-        dataPath: "indices+precomputed-groups-cache-hit",
-        descriptors: descriptorList,
-        effectiveDescriptors: descriptorList,
-        restoredDefault: false,
-      },
-      sortedIndices: cachedPrefixState.sortedOrder,
-      rankBuildMs,
-    };
-  }
-
-  const sortStartMs = performance.now();
-  const groupedScratch = ensurePrecomputedGroupedSortScratch(totalRows);
-  let output = groupedScratch.primary;
-  let tempBuffer = groupedScratch.secondary;
-  const counts = groupedScratch.counts;
-  const prefixStartsByLength = new Array(descriptorList.length + 1);
-  const prefixEndsByLength = new Array(descriptorList.length + 1);
-  let dataPath = "indices+precomputed-groups";
-  let activeGroupStarts = [];
-  let activeGroupEnds = [];
-  let startDescriptorIndex = 1;
-
-  if (
-    cachedPrefixState &&
-    cachedPrefixState.matchLength >= 1 &&
-    cachedPrefixState.matchLength < descriptorList.length
-  ) {
-    if (cachedPrefixState.sortedOrder === tempBuffer) {
-      const swap = output;
-      output = tempBuffer;
-      tempBuffer = swap;
-    } else if (cachedPrefixState.sortedOrder !== output) {
-      output.set(cachedPrefixState.sortedOrder);
-    }
-    activeGroupStarts = Array.isArray(cachedPrefixState.groupStarts)
-      ? cachedPrefixState.groupStarts.slice()
-      : [];
-    activeGroupEnds = Array.isArray(cachedPrefixState.groupEnds)
-      ? cachedPrefixState.groupEnds.slice()
-      : [];
-    startDescriptorIndex = cachedPrefixState.matchLength;
-    dataPath = "indices+precomputed-groups-incremental";
-
-    const cachedStartsByLength =
-      precomputedGroupedSortCache.prefixStartsByLength &&
-      typeof precomputedGroupedSortCache.prefixStartsByLength === "object"
-        ? precomputedGroupedSortCache.prefixStartsByLength
-        : Object.create(null);
-    const cachedEndsByLength =
-      precomputedGroupedSortCache.prefixEndsByLength &&
-      typeof precomputedGroupedSortCache.prefixEndsByLength === "object"
-        ? precomputedGroupedSortCache.prefixEndsByLength
-        : Object.create(null);
-    for (let len = 1; len <= cachedPrefixState.matchLength; len += 1) {
-      const cachedStarts = cachedStartsByLength[len];
-      const cachedEnds = cachedEndsByLength[len];
-      if (
-        Array.isArray(cachedStarts) &&
-        Array.isArray(cachedEnds) &&
-        cachedStarts.length === cachedEnds.length
-      ) {
-        prefixStartsByLength[len] = cachedStarts.slice();
-        prefixEndsByLength[len] = cachedEnds.slice();
-      }
-    }
-
-    const descriptorCount = descriptorList.length;
-    const lastDescriptorIndex = descriptorCount - 1;
-    const cachedDescriptorList = Array.isArray(precomputedGroupedSortCache.descriptors)
-      ? precomputedGroupedSortCache.descriptors
-      : [];
-    const canUseTailDirectionFlip =
-      lastDescriptorIndex >= 1 &&
-      cachedPrefixState.matchLength === lastDescriptorIndex &&
-      cachedDescriptorList.length === descriptorCount &&
-      cachedDescriptorList[lastDescriptorIndex] &&
-      descriptorList[lastDescriptorIndex] &&
-      cachedDescriptorList[lastDescriptorIndex].columnKey ===
-        descriptorList[lastDescriptorIndex].columnKey &&
-      normalizeSortDirection(cachedDescriptorList[lastDescriptorIndex].direction) !==
-        normalizeSortDirection(descriptorList[lastDescriptorIndex].direction);
-    if (canUseTailDirectionFlip) {
-      const previousTailDescriptor = cachedDescriptorList[lastDescriptorIndex];
-      const previousTailRankBuild = buildPrecomputedRankForColumn(
-        previousTailDescriptor.columnKey,
-        totalRows,
-        previousTailDescriptor.direction
-      );
-      const currentTailRankByRowId = rankColumns[lastDescriptorIndex];
-      if (
-        previousTailRankBuild &&
-        isSupportedRankArray(previousTailRankBuild.rankByRowId) &&
-        isSupportedRankArray(currentTailRankByRowId)
-      ) {
-        const previousTailRankByRowId = previousTailRankBuild.rankByRowId;
-        const nextGroupStarts = [];
-        const nextGroupEnds = [];
-        for (let g = 0; g < activeGroupStarts.length; g += 1) {
-          const start = activeGroupStarts[g];
-          const end = activeGroupEnds[g];
-          if (end - start <= 1) {
-            continue;
-          }
-
-          const runStarts = [];
-          const runEnds = [];
-          let runStart = start;
-          let runRank = previousTailRankByRowId[output[start] >>> 0] >>> 0;
-          for (let i = start + 1; i <= end; i += 1) {
-            const atEnd = i === end;
-            const nextRank = atEnd
-              ? -1
-              : previousTailRankByRowId[output[i] >>> 0] >>> 0;
-            if (atEnd || nextRank !== runRank) {
-              runStarts.push(runStart);
-              runEnds.push(i);
-              runStart = i;
-              runRank = nextRank;
-            }
-          }
-
-          let writeOffset = start;
-          for (let r = runStarts.length - 1; r >= 0; r -= 1) {
-            const runSegmentStart = runStarts[r];
-            const runSegmentEnd = runEnds[r];
-            tempBuffer.set(
-              output.subarray(runSegmentStart, runSegmentEnd),
-              writeOffset
-            );
-            writeOffset += runSegmentEnd - runSegmentStart;
-          }
-          output.set(tempBuffer.subarray(start, end), start);
-
-          collectEqualRankSubgroups(
-            output,
-            start,
-            end,
-            currentTailRankByRowId,
-            nextGroupStarts,
-            nextGroupEnds
-          );
-        }
-
-        activeGroupStarts = nextGroupStarts;
-        activeGroupEnds = nextGroupEnds;
-        prefixStartsByLength[lastDescriptorIndex + 1] = nextGroupStarts.slice();
-        prefixEndsByLength[lastDescriptorIndex + 1] = nextGroupEnds.slice();
-        startDescriptorIndex = descriptorCount;
-        dataPath = "indices+precomputed-groups-tailflip";
-      }
-    }
-  } else {
-    const primarySortedIndices = getPrecomputedSortedIndexForColumn(
-      descriptorList[0].columnKey,
-      totalRows
-    );
-    if (!(primarySortedIndices instanceof Uint32Array)) {
-      return null;
-    }
-
-    const primaryRank = rankColumns[0];
-    const primaryDirectionDesc = descriptorList[0].direction === "desc";
-    const ascGroupStarts = [];
-    const ascGroupEnds = [];
-    let groupStart = 0;
-    let previousRank = primaryRank[primarySortedIndices[0] >>> 0] >>> 0;
-    for (let i = 1; i <= totalRows; i += 1) {
-      const atEnd = i === totalRows;
-      const nextRank = atEnd
-        ? -1
-        : primaryRank[primarySortedIndices[i] >>> 0] >>> 0;
-      if (atEnd || nextRank !== previousRank) {
-        ascGroupStarts.push(groupStart);
-        ascGroupEnds.push(i);
-        if (ascGroupStarts.length > PRECOMPUTED_FULL_GROUP_MAX_GROUPS) {
-          return null;
-        }
-        groupStart = i;
-        previousRank = nextRank;
-      }
-    }
-
-    if (!primaryDirectionDesc) {
-      output.set(primarySortedIndices);
-      for (let i = 0; i < ascGroupStarts.length; i += 1) {
-        const start = ascGroupStarts[i];
-        const end = ascGroupEnds[i];
-        if (end - start > 1) {
-          activeGroupStarts.push(start);
-          activeGroupEnds.push(end);
-        }
-      }
-    } else {
-      let writeOffset = 0;
-      for (let i = ascGroupStarts.length - 1; i >= 0; i -= 1) {
-        const start = ascGroupStarts[i];
-        const end = ascGroupEnds[i];
-        const length = end - start;
-        output.set(primarySortedIndices.subarray(start, end), writeOffset);
-        if (length > 1) {
-          activeGroupStarts.push(writeOffset);
-          activeGroupEnds.push(writeOffset + length);
-        }
-        writeOffset += length;
-      }
-    }
-
-    prefixStartsByLength[1] = activeGroupStarts.slice();
-    prefixEndsByLength[1] = activeGroupEnds.slice();
-  }
-
-  if (startDescriptorIndex < 1) {
-    startDescriptorIndex = 1;
-  }
-
-  for (let d = startDescriptorIndex; d < descriptorList.length; d += 1) {
-    const nextGroupStarts = [];
-    const nextGroupEnds = [];
-    if (activeGroupStarts.length > 0) {
-      const rankByRowId = rankColumns[d];
-
-      for (let g = 0; g < activeGroupStarts.length; g += 1) {
-        const start = activeGroupStarts[g];
-        const end = activeGroupEnds[g];
-        const groupLength = end - start;
-        if (groupLength <= 1) {
-          continue;
-        }
-
-        const shouldCheckOrder =
-          dataPath === "indices+precomputed-groups-incremental" ||
-          groupLength <= PRECOMPUTED_ORDER_CHECK_MAX_GROUP_SIZE;
-        const alreadyOrdered = shouldCheckOrder
-          ? isRowIdRangeOrderedByUint32Key(
-              output,
-              start,
-              end,
-              rankByRowId,
-              false
-            )
-          : false;
-        if (!alreadyOrdered) {
-          const sorted = stableRadixSortRowIdsRangeByUint32Key(
-            output,
-            start,
-            end,
-            rankByRowId,
-            false,
-            tempBuffer,
-            counts,
-            rankMaxByColumn[d]
-          );
-          if (!sorted) {
-            return null;
-          }
-        }
-
-        collectEqualRankSubgroups(
-          output,
-          start,
-          end,
-          rankByRowId,
-          nextGroupStarts,
-          nextGroupEnds
-        );
-      }
-    }
-
-    if (nextGroupStarts.length > PRECOMPUTED_FULL_GROUP_MAX_GROUPS) {
-      return null;
-    }
-
-    activeGroupStarts = nextGroupStarts;
-    activeGroupEnds = nextGroupEnds;
-    prefixStartsByLength[d + 1] = nextGroupStarts.slice();
-    prefixEndsByLength[d + 1] = nextGroupEnds.slice();
-  }
-
-  const durationMs = performance.now() - sortStartMs;
-  updatePrecomputedGroupedSortCache(
-    totalRows,
-    descriptorList,
-    output,
-    prefixStartsByLength,
-    prefixEndsByLength
-  );
-
-  return {
-    sortResult: {
-      changedOrder: output.length > 1,
-      durationMs,
-      sortMode: "precomputed",
-      dataPath,
-      descriptors: descriptorList,
-      effectiveDescriptors: descriptorList,
-      restoredDefault: false,
-    },
-    sortedIndices: output,
-    rankBuildMs,
-  };
-}
-
-function buildSortedIndicesViaPrecomputedMode(
-  filteredIndices,
-  filteredCount,
-  activeDescriptors,
-  rowCount
-) {
-  const descriptorList = normalizeSortDescriptorList(activeDescriptors);
-  if (descriptorList.length === 0) {
-    return null;
-  }
-
-  if (descriptorList.length > 1) {
-    const totalRows = Math.max(0, Number(rowCount) || 0);
-    const count = getResolvedFilteredCount(filteredIndices, filteredCount, totalRows);
-    const fullSelection = isFullSelectionForPrecomputedSort(
-      filteredIndices,
-      count,
-      totalRows
-    );
-    if (!fullSelection) {
-      const subsetReuseRun = tryReusePrecomputedSubsetSort(
-        filteredIndices,
-        count,
-        descriptorList,
-        totalRows
-      );
-      if (subsetReuseRun) {
-        updatePrecomputedSubsetSortCache(
-          totalRows,
-          descriptorList,
-          subsetReuseRun.sortedIndices,
-          count
-        );
-        return subsetReuseRun;
-      }
-    }
-    const canReuseGroupedPrefix = fullSelection
-      ? hasReusablePrecomputedGroupedPrefix(descriptorList, totalRows)
-      : false;
-    if (
-      fullSelection &&
-      (descriptorList.length >= PRECOMPUTED_GROUP_MIN_DESCRIPTOR_COUNT ||
-        canReuseGroupedPrefix)
-    ) {
-      const groupedRun = buildSortedIndicesViaPrecomputedGroupedFullMode(
-        descriptorList,
-        totalRows
-      );
-      if (groupedRun) {
-        updatePrecomputedSubsetSortCache(
-          totalRows,
-          descriptorList,
-          groupedRun.sortedIndices,
-          totalRows
-        );
-        return groupedRun;
-      }
-    }
-
-    const rankTupleRun = buildSortedIndicesViaPrecomputedRankTupleMode(
-      filteredIndices,
-      filteredCount,
-      descriptorList,
-      rowCount
-    );
-    if (rankTupleRun && hasIndexCollection(rankTupleRun.sortedIndices)) {
-      updatePrecomputedSubsetSortCache(
-        totalRows,
-        descriptorList,
-        rankTupleRun.sortedIndices,
-        count
-      );
-    }
-    return rankTupleRun;
-  }
-
-  const descriptor = descriptorList[0];
-  const sortedColumnIndices = getPrecomputedSortedIndexForColumn(
-    descriptor.columnKey,
-    rowCount
-  );
-  if (!(sortedColumnIndices instanceof Uint32Array)) {
-    return null;
-  }
-
-  const totalRows = Math.max(0, Number(rowCount) || 0);
-  const count = getResolvedFilteredCount(filteredIndices, filteredCount, totalRows);
-  const fullSelection = isFullSelectionForPrecomputedSort(
-    filteredIndices,
-    count,
-    totalRows
-  );
-
-  let sortedIndices = null;
-  let dataPath = "indices+precomputed-scan";
-  let rankBuildMs = 0;
-  let sortCoreMs = 0;
-
-  if (fullSelection) {
-    const coreStartMs = performance.now();
-    sortedIndices =
-      descriptor.direction === "desc"
-        ? buildPrecomputedDescAllIndices(sortedColumnIndices, totalRows)
-        : sortedColumnIndices;
-    sortCoreMs = performance.now() - coreStartMs;
-    dataPath = "indices+precomputed-full";
-  } else {
-    const useRankSort = shouldUseRankSortForPrecomputedSubset(count, totalRows);
-    if (useRankSort) {
-      const rankBuild = buildPrecomputedRankForColumn(
-        descriptor.columnKey,
-        totalRows,
-        descriptor.direction
-      );
-      if (rankBuild) {
-        rankBuildMs = Number(rankBuild.durationMs) || 0;
-      }
-      const coreStartMs = performance.now();
-      sortedIndices = buildSortedIndicesFromPrecomputedRanks(
-        filteredIndices,
-        count,
-        rankBuild ? rankBuild.rankByRowId : null,
-        totalRows,
-        rankBuild ? rankBuild.maxRank : undefined
-      );
-      sortCoreMs = performance.now() - coreStartMs;
-      if (sortedIndices) {
-        dataPath = "indices+precomputed-rank";
-      }
-    }
-
-    if (!sortedIndices) {
-      const coreStartMs = performance.now();
-      sortedIndices = buildSortedIndicesFromPrecomputedScan(
-        filteredIndices,
-        count,
-        sortedColumnIndices,
-        descriptor.direction,
-        totalRows
-      );
-      sortCoreMs = performance.now() - coreStartMs;
-      dataPath = "indices+precomputed-scan";
-    }
-  }
-
-  if (!hasIndexCollection(sortedIndices)) {
-    return null;
-  }
-
-  return {
-    sortResult: {
-      changedOrder: sortedIndices.length > 1,
-      durationMs: sortCoreMs,
-      sortMode: "precomputed",
-      dataPath,
-      descriptors: descriptorList,
-      effectiveDescriptors: descriptorList,
-      restoredDefault: false,
-    },
-    sortedIndices,
-    rankBuildMs,
-  };
-}
-
-function buildSortedIndicesViaRowSort(
-  baseIndices,
-  sourceRows,
-  sortOptions,
-  sortModeOverride
-) {
-  const rowsToSort = new Array(baseIndices.length);
-  const rowIndexByRef = new Map();
-
-  for (let i = 0; i < baseIndices.length; i += 1) {
-    const rowIndex = baseIndices[i];
-    const row = sourceRows[rowIndex];
-    rowsToSort[i] = row;
-    rowIndexByRef.set(row, rowIndex);
-  }
-
-  const sortResult = sortController.sortRows(
-    rowsToSort,
-    resolveSortModeForRun(sortModeOverride),
-    sortOptions
-  );
-  const sortedIndices = new Array(rowsToSort.length);
-  for (let i = 0; i < rowsToSort.length; i += 1) {
-    const mappedIndex = rowIndexByRef.get(rowsToSort[i]);
-    sortedIndices[i] = typeof mappedIndex === "number" ? mappedIndex : baseIndices[i];
-  }
-
-  return {
-    sortResult,
-    sortedIndices,
-  };
-}
-
-function buildSortedIndicesViaIndexSort(
-  baseIndices,
-  sortOptions,
-  activeDescriptors,
-  sortModeOverride,
-  rowCount
-) {
-  const sortedIndices = baseIndices.slice();
-  const descriptorList = normalizeSortDescriptorList(activeDescriptors);
-  const sourceRowCount = Math.max(0, Number(rowCount) | 0);
-  const precomputedRankColumns = buildPrecomputedSortRankColumns(
-    descriptorList,
-    sourceRowCount
-  );
-  const runSortOptions = Object.assign({}, sortOptions || {});
-  let sourceRows = null;
-  if (Array.isArray(precomputedRankColumns)) {
-    runSortOptions.precomputedRankColumns = precomputedRankColumns;
-  } else {
-    const numericColumnarData = getNumericColumnarDataForPrecomputedSort();
-    runSortOptions.precomputedIndexKeys = buildPrecomputedSortKeyColumns(
-      sortedIndices,
-      numericColumnarData,
-      descriptorList
-    );
-    if (!Array.isArray(runSortOptions.precomputedIndexKeys)) {
-      sourceRows = ensureObjectRowsAvailable();
-    }
-  }
-  const sortResult = sortController.sortIndices(
-    sortedIndices,
-    sourceRows,
-    resolveSortModeForRun(sortModeOverride),
-    runSortOptions
-  );
-
-  return {
-    sortResult,
-    sortedIndices,
+    snapshotType: "row-indices-v2",
+    rowIndices: snapshotIndices,
+    count: snapshotIndices.length,
+    filterCoreMs: Number(filterResult && filterResult.coreMs) || 0,
   };
 }
 
 function buildSortedIndicesForCurrentResult(filterResult, options) {
-  if (!sortController) {
+  if (!sortController || !fastTableEngine) {
     return null;
   }
 
   const sortBuildOptions = options || {};
-  const activeDescriptors = sortController.getSortDescriptors();
-  if (!Array.isArray(activeDescriptors) || activeDescriptors.length === 0) {
+  const activeDescriptors = normalizeSortDescriptorList(
+    sortController.getSortDescriptors()
+  );
+  if (activeDescriptors.length === 0) {
     return null;
   }
 
+  const loadedRowCount = getLoadedRowCount();
+  if (loadedRowCount <= 0) {
+    return null;
+  }
+
+  const rowsSnapshot = buildSortSnapshotFromFilterResult(filterResult);
   const selectedSortMode = getSortMode();
   const shouldPreferPrecomputedFastPath =
     sortBuildOptions.preferPrecomputedFastPath === true &&
     selectedSortMode !== "precomputed";
-  const sortOptions = getSortRuntimeOptions();
-  const sortTotalStartMs = performance.now();
-  const loadedRowCount = getLoadedRowCount();
 
-  let sortedRun = null;
-
-  if (selectedSortMode === "precomputed" || shouldPreferPrecomputedFastPath) {
-    sortedRun = buildSortedIndicesViaPrecomputedMode(
-      filterResult.filteredIndices,
-      filterResult.filteredCount,
-      activeDescriptors,
-      loadedRowCount
-    );
-  }
-
-  if (!sortedRun) {
-    if (loadedRowCount <= 0) {
+  function normalizeRuntimeSortRun(runtimeSortRun, fallbackMode) {
+    if (!runtimeSortRun || !hasIndexCollection(runtimeSortRun.sortedIndices)) {
       return null;
     }
 
-    const baseIndices = materializeFilteredIndexArray(
-      filterResult.filteredIndices,
-      loadedRowCount
+    const indices = runtimeSortRun.sortedIndices;
+    const sortCoreMs = Number.isFinite(runtimeSortRun.sortCoreMs)
+      ? Number(runtimeSortRun.sortCoreMs)
+      : Number.isFinite(runtimeSortRun.sortMs)
+        ? Number(runtimeSortRun.sortMs)
+        : Number(runtimeSortRun.durationMs) || 0;
+    const sortTotalMs = Number.isFinite(runtimeSortRun.sortTotalMs)
+      ? Number(runtimeSortRun.sortTotalMs)
+      : sortCoreMs;
+    const sortPrepMs = Number.isFinite(runtimeSortRun.sortPrepMs)
+      ? Number(runtimeSortRun.sortPrepMs)
+      : sortTotalMs - sortCoreMs;
+    const telemetryDescriptors =
+      Array.isArray(runtimeSortRun.descriptors) &&
+      runtimeSortRun.descriptors.length > 0
+        ? normalizeSortDescriptorList(runtimeSortRun.descriptors)
+        : activeDescriptors;
+    const telemetrySortMode =
+      typeof runtimeSortRun.sortMode === "string" && runtimeSortRun.sortMode !== ""
+        ? runtimeSortRun.sortMode
+        : fallbackMode;
+
+    return {
+      indices,
+      sortedCount: Number.isFinite(runtimeSortRun.sortedCount)
+        ? Math.max(0, Number(runtimeSortRun.sortedCount) | 0)
+        : indices.length,
+      result: {
+        changedOrder: indices.length > 1,
+        durationMs: sortCoreMs,
+        sortMode: telemetrySortMode,
+        dataPath:
+          typeof runtimeSortRun.dataPath === "string" && runtimeSortRun.dataPath !== ""
+            ? runtimeSortRun.dataPath
+            : "indices",
+        comparatorMode:
+          typeof runtimeSortRun.comparatorMode === "string"
+            ? runtimeSortRun.comparatorMode
+            : "",
+        descriptors: telemetryDescriptors,
+        effectiveDescriptors: telemetryDescriptors,
+        restoredDefault: runtimeSortRun.restoredDefault === true,
+      },
+      sortTotalMs,
+      sortPrepMs,
+      rankBuildMs: Number(runtimeSortRun.rankBuildMs) || 0,
+    };
+  }
+
+  function runRuntimeSortPass(requestedMode) {
+    const mode =
+      typeof requestedMode === "string" && requestedMode !== ""
+        ? requestedMode
+        : selectedSortMode;
+    const runtimeSortRun = fastTableEngine.runSortSnapshotPass(
+      rowsSnapshot,
+      activeDescriptors,
+      mode
     );
-    const effectiveSortMode =
-      selectedSortMode === "precomputed" ? "native" : selectedSortMode;
-    sortedRun = sortOptions.useIndexSort
-      ? buildSortedIndicesViaIndexSort(
-          baseIndices,
-          sortOptions,
-          activeDescriptors,
-          effectiveSortMode,
-          loadedRowCount
-        )
-      : buildSortedIndicesViaRowSort(
-          baseIndices,
-          ensureObjectRowsAvailable(),
-          sortOptions,
-          effectiveSortMode
-        );
+    return normalizeRuntimeSortRun(runtimeSortRun, mode);
   }
 
-  if (!sortedRun || !sortedRun.sortResult) {
-    return null;
+  if (selectedSortMode === "precomputed") {
+    return runRuntimeSortPass("precomputed");
   }
 
-  const sortTotalMs = performance.now() - sortTotalStartMs;
-  const sortCoreMs = Number(sortedRun.sortResult.durationMs) || 0;
-  const sortPrepMs = sortTotalMs - sortCoreMs;
+  if (shouldPreferPrecomputedFastPath) {
+    const precomputedRun = runRuntimeSortPass("precomputed");
+    const precomputedMode =
+      precomputedRun &&
+      precomputedRun.result &&
+      typeof precomputedRun.result.sortMode === "string"
+        ? precomputedRun.result.sortMode
+        : "";
+    if (precomputedRun && precomputedMode.startsWith("precomputed")) {
+      return precomputedRun;
+    }
+  }
 
-  return {
-    indices: sortedRun.sortedIndices,
-    sortedCount: sortedRun.sortedIndices.length,
-    result: sortedRun.sortResult,
-    sortTotalMs,
-    sortPrepMs,
-    rankBuildMs: Number(sortedRun.rankBuildMs) || 0,
-  };
+  return runRuntimeSortPass(selectedSortMode);
 }
-
 function renderPreviewFromObjectRowIndices(rows, filteredIndices, keepScroll) {
   const totalRows = getFilteredIndicesCount(filteredIndices, rows.length);
   renderPreviewVirtual(
@@ -4330,7 +2372,7 @@ function renderFilterResultByCurrentMode(filterResult, renderIndices, keepScroll
   renderPreviewFromObjectRowIndices(filterResult.rows, renderIndices, keepScroll);
 }
 
-function runFiltersWithRawFilters(rawFilters, options) {
+function runFilterCore(rawFilters, options) {
   const executionOptions = options || {};
   const skipRender = executionOptions.skipRender === true;
   const skipStatus = executionOptions.skipStatus === true;
@@ -4343,11 +2385,45 @@ function runFiltersWithRawFilters(rawFilters, options) {
     rawFilters && typeof rawFilters === "object" ? rawFilters : {};
 
   if (getLoadedRowCount() === 0) {
-    if (!skipRender) {
+    return {
+      kind: "no-data",
+      skipRender,
+      skipStatus,
+    };
+  }
+
+  const orchestration = filteringRuntimeOrchestrator.execute(sourceRawFilters, {
+    filterOptions,
+    skipRender,
+    preferPrecomputedFastPath,
+  });
+  if (!orchestration) {
+    return null;
+  }
+  window.fastTableLastFilterMode =
+    orchestration.filterModePath || getCurrentFilterModeKey();
+
+  return {
+    kind: "ok",
+    skipRender,
+    skipStatus,
+    keepScroll,
+    filterOptions,
+    orchestration,
+  };
+}
+
+function renderFilterUi(coreRun) {
+  if (!coreRun) {
+    return null;
+  }
+
+  if (coreRun.kind === "no-data") {
+    if (!coreRun.skipRender) {
       clearPreviewBody();
     }
 
-    if (!skipStatus) {
+    if (!coreRun.skipStatus) {
       filterStatusEl.textContent = "No data loaded yet.";
     }
 
@@ -4355,35 +2431,19 @@ function runFiltersWithRawFilters(rawFilters, options) {
     return null;
   }
 
-  const filterResult = filterRuntimeBridge.runFilterPassWithRawFilters(
-    sourceRawFilters,
-    {
-      filterOptions,
-    }
-  );
-  if (!filterResult) {
-    return null;
-  }
-  const active = filterResult.active === true;
-  const selectedBaseCandidateCount =
-    Number.isFinite(filterResult.selectedBaseCandidateCount)
-      ? Number(filterResult.selectedBaseCandidateCount)
-      : -1;
-  const topLevelCacheEvent = filterResult.topLevelCacheEvent || null;
-  const dictionaryKeySearchPlan = filterResult.dictionaryPrefilter || null;
-  const filterCoreDurationMs = Number(filterResult.coreMs) || 0;
-  window.fastTableLastFilterMode = filterResult.modePath || getCurrentFilterModeKey();
-
-  let sortRun = null;
-  let renderIndices = filterResult.filteredIndices;
-  if (!skipRender) {
-    sortRun = buildSortedIndicesForCurrentResult(filterResult, {
-      preferPrecomputedFastPath,
-    });
-    if (sortRun && hasIndexCollection(sortRun.indices)) {
-      renderIndices = sortRun.indices;
-    }
-  }
+  const skipRender = coreRun.skipRender === true;
+  const skipStatus = coreRun.skipStatus === true;
+  const keepScroll = coreRun.keepScroll === true;
+  const filterOptions = coreRun.filterOptions || getFilterOptions();
+  const orchestration = coreRun.orchestration;
+  const filterResult = orchestration.filterResult;
+  const active = orchestration.active;
+  const selectedBaseCandidateCount = orchestration.selectedBaseCandidateCount;
+  const topLevelCacheEvent = orchestration.topLevelFilterCacheEvent;
+  const dictionaryKeySearchPlan = orchestration.dictionaryKeySearchPlan;
+  const filterCoreDurationMs = orchestration.coreMs;
+  const sortRun = orchestration.sort;
+  const renderIndices = orchestration.renderIndices;
 
   let renderDurationMs = 0;
   let renderStart = 0;
@@ -4404,60 +2464,25 @@ function runFiltersWithRawFilters(rawFilters, options) {
   const totalDurationMs = skipRender
     ? filterCoreDurationMs
     : filterCoreDurationMs + renderDurationMs;
-  const reverseIndexMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.durationMs
-      : 0;
-  const reverseIndexSearchMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.searchMs || 0
-      : 0;
-  const reverseIndexSearchFullMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.searchFullMs || 0
-      : 0;
-  const reverseIndexSearchRefinedMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.searchRefinedMs || 0
-      : 0;
-  const reverseIndexMergeMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.mergeMs || 0
-      : 0;
-  const reverseIndexMergeConcatMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.mergeConcatMs || 0
-      : 0;
-  const reverseIndexMergeSortMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.mergeSortMs || 0
-      : 0;
-  const reverseIndexIntersectMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.intersectionMs || 0
-      : 0;
   const output = {
-    filteredCount: filterResult.filteredCount,
-    filteredIndices: filterResult.filteredIndices,
+    filteredCount: orchestration.filteredCount,
+    filteredIndices: orchestration.filteredIndices,
     renderIndices,
     coreMs: filterCoreDurationMs,
-    reverseIndexMs,
-    reverseIndexSearchMs,
-    reverseIndexSearchFullMs,
-    reverseIndexSearchRefinedMs,
-    reverseIndexMergeMs,
-    reverseIndexMergeConcatMs,
-    reverseIndexMergeSortMs,
-    reverseIndexIntersectMs,
+    reverseIndexMs: orchestration.reverseIndexMs,
+    reverseIndexSearchMs: orchestration.reverseIndexSearchMs,
+    reverseIndexSearchFullMs: orchestration.reverseIndexSearchFullMs,
+    reverseIndexSearchRefinedMs: orchestration.reverseIndexSearchRefinedMs,
+    reverseIndexMergeMs: orchestration.reverseIndexMergeMs,
+    reverseIndexMergeConcatMs: orchestration.reverseIndexMergeConcatMs,
+    reverseIndexMergeSortMs: orchestration.reverseIndexMergeSortMs,
+    reverseIndexIntersectMs: orchestration.reverseIndexIntersectMs,
     renderMs: renderDurationMs,
     totalMs: totalDurationMs,
     active,
     sort: sortRun,
     topLevelFilterCacheEvent: topLevelCacheEvent,
-    reverseIndex:
-      dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-        ? dictionaryKeySearchPlan
-        : null,
+    reverseIndex: orchestration.reverseIndex,
   };
 
   if (!skipRender) {
@@ -4573,15 +2598,27 @@ function runFiltersWithRawFilters(rawFilters, options) {
   return output;
 }
 
-function applyFiltersAndRender(options) {
+function runFiltersWithRawFilters(rawFilters, options) {
+  const coreRun = runFilterCore(rawFilters, options);
+  return renderFilterUi(coreRun);
+}
+
+function runFilterFromCurrentUi(options) {
   const executionOptions = options || {};
   const rawFilters = executionOptions.rawFilters || readRawFilters();
-  return runFiltersWithRawFilters(rawFilters, executionOptions);
+  const coreRun = runFilterCore(rawFilters, executionOptions);
+  return renderFilterUi(coreRun);
+}
+
+function applyFiltersAndRender(options) {
+  return runFilterFromCurrentUi(options);
 }
 
 function attachFilterListeners() {
   for (let i = 0; i < filterInputs.length; i += 1) {
-    filterInputs[i].addEventListener("input", applyFiltersAndRender);
+    filterInputs[i].addEventListener("input", () => {
+      runFilterFromCurrentUi();
+    });
   }
 }
 
@@ -4757,7 +2794,7 @@ function trySwitchModeUsingExistingRows(options) {
     return;
   }
 
-  applyFiltersAndRender();
+  runFilterFromCurrentUi();
 }
 
 function setRawFiltersUI(rawFilters) {
@@ -4775,17 +2812,6 @@ function setSingleFilterUI(columnKey, value) {
     const input = filterInputs[i];
     input.value = input.dataset.key === columnKey ? String(value) : "";
   }
-}
-
-function buildSingleFilterRawFilters(columnKey, value) {
-  const rawFilters = {};
-
-  for (let i = 0; i < columnKeys.length; i += 1) {
-    rawFilters[columnKeys[i]] = "";
-  }
-
-  rawFilters[columnKey] = String(value);
-  return rawFilters;
 }
 
 function getModeOptions() {
@@ -5024,7 +3050,7 @@ async function runGenerationAction(options) {
   }
 }
 
-const fastTableEngine = createFastTableEngine({
+fastTableEngine = createFastTableEngine({
   adapters: {
     hasData() {
       return getLoadedRowCount() > 0;
@@ -5038,13 +3064,14 @@ const fastTableEngine = createFastTableEngine({
     setRawFilters: setRawFiltersUI,
     setSingleFilter: setSingleFilterUI,
     clearFilters: clearFiltersUI,
-    runFilterPass: applyFiltersAndRender,
-    runSingleFilterPass(columnKey, value, options) {
-      const rawFilters = buildSingleFilterRawFilters(columnKey, value);
-      return runFiltersWithRawFilters(rawFilters, options);
-    },
+    runFilterPass: (options) => applyFiltersAndRender(options),
+    runSingleFilterPass: (columnKey, value, options) =>
+      filterRuntimeBridge.runSingleFilterPass(columnKey, value, options),
     runFilterPassWithRawFilters(rawFilters, options) {
-      return runFiltersWithRawFilters(rawFilters || readRawFilters(), options);
+      return filterRuntimeBridge.runFilterPassWithRawFilters(
+        rawFilters || readRawFilters(),
+        options
+      );
     },
     getSortModes: getAvailableSortModes,
     getSortMode,
@@ -5052,9 +3079,8 @@ const fastTableEngine = createFastTableEngine({
     setSortOptions: setSortRuntimeOptions,
     buildSortRowsSnapshot: buildRowsSnapshotFromRawFilters,
     runSortSnapshotPass,
-    prewarmPrecomputedSortState() {
-      return sortBenchmarkRuntimeBridge.prewarmPrecomputedSortState();
-    },
+    prewarmPrecomputedSortState: () =>
+      appSortRuntimeBridge.prewarmPrecomputedSortState(),
     isTimSortAvailable,
     getNumericColumnarForSave,
     applyLoadedColumnarBinaryDataset,
@@ -5086,7 +3112,7 @@ if (sortModeEl) {
   sortModeEl.addEventListener("change", () => {
     syncSortModeAvailability();
     runSortInteraction(() => {
-      applySortAndRender();
+      runSortFromCurrentUi();
     }, { disableButtons: false });
   });
 }
@@ -5094,7 +3120,7 @@ if (sortModeEl) {
 if (useTypedSortComparatorEl) {
   useTypedSortComparatorEl.addEventListener("change", () => {
     runSortInteraction(() => {
-      applySortAndRender();
+      runSortFromCurrentUi();
     }, { disableButtons: false });
   });
 }
@@ -5102,7 +3128,7 @@ if (useTypedSortComparatorEl) {
 if (useIndexSortEl) {
   useIndexSortEl.addEventListener("change", () => {
     runSortInteraction(() => {
-      applySortAndRender();
+      runSortFromCurrentUi();
     }, { disableButtons: false });
   });
 }
@@ -5115,40 +3141,40 @@ if (resetSortBtnEl) {
 
     runSortInteraction(() => {
       resetSortState(false);
-      applySortAndRender();
+      runSortFromCurrentUi();
     }, { disableButtons: false });
   });
 }
 
 enableCachingEl.addEventListener("change", () => {
-  applyFiltersAndRender();
+  runFilterFromCurrentUi();
 });
 
 if (useDictionaryKeySearchEl) {
   useDictionaryKeySearchEl.addEventListener("change", () => {
-    applyFiltersAndRender();
+    runFilterFromCurrentUi();
   });
 }
 
 if (useDictionaryIntersectionEl) {
   useDictionaryIntersectionEl.addEventListener("change", () => {
-    applyFiltersAndRender();
+    runFilterFromCurrentUi();
   });
 }
 
 if (useSmarterPlannerEl) {
   useSmarterPlannerEl.addEventListener("change", () => {
-    applyFiltersAndRender();
+    runFilterFromCurrentUi();
   });
 }
 
 useSmartFilteringEl.addEventListener("change", () => {
-  applyFiltersAndRender();
+  runFilterFromCurrentUi();
 });
 
 if (useFilterCacheEl) {
   useFilterCacheEl.addEventListener("change", () => {
-    applyFiltersAndRender();
+    runFilterFromCurrentUi();
   });
 }
 

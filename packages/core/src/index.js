@@ -4,6 +4,7 @@ export * from "./engine.js";
 export * from "./runtime.js";
 export * from "./filtering.js";
 export * from "./filtering-orchestration.js";
+export * from "./filtering-runtime-orchestration.js";
 export * from "./filter-runtime-bridge.js";
 export * from "./sorting.js";
 export * from "./sorting-precomputed-runtime.js";

@@ -102,8 +102,48 @@ function defaultNow() {
   return Date.now();
 }
 
+const BENCHMARK_TICK_POLICY_MICRO = "micro";
+const BENCHMARK_TICK_POLICY_MACRO = "macro";
+
+function resolveBenchmarkTickPolicy(policy, fallbackPolicy) {
+  const fallback =
+    fallbackPolicy === BENCHMARK_TICK_POLICY_MACRO
+      ? BENCHMARK_TICK_POLICY_MACRO
+      : BENCHMARK_TICK_POLICY_MICRO;
+  const normalized =
+    typeof policy === "string" ? policy.trim().toLowerCase() : "";
+  if (
+    normalized === BENCHMARK_TICK_POLICY_MICRO ||
+    normalized === BENCHMARK_TICK_POLICY_MACRO
+  ) {
+    return normalized;
+  }
+
+  return fallback;
+}
+
+function createBenchmarkDelayTick(policy) {
+  const resolvedPolicy = resolveBenchmarkTickPolicy(
+    policy,
+    BENCHMARK_TICK_POLICY_MICRO
+  );
+  if (resolvedPolicy === BENCHMARK_TICK_POLICY_MACRO) {
+    return function benchmarkDelayTickMacro() {
+      return new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    };
+  }
+
+  return function benchmarkDelayTickMicro() {
+    return Promise.resolve();
+  };
+}
+
+const defaultDelayTickFn = createBenchmarkDelayTick(BENCHMARK_TICK_POLICY_MICRO);
+
 function defaultDelayTick() {
-  return Promise.resolve();
+  return defaultDelayTickFn();
 }
 
 function createLineReporter(onUpdate) {
@@ -770,6 +810,10 @@ export {
   DEFAULT_FILTER_BENCHMARK_CASES,
   DEFAULT_SORT_BENCHMARK_ROUNDS,
   DEFAULT_SORT_BENCHMARK_CASES,
+  BENCHMARK_TICK_POLICY_MICRO,
+  BENCHMARK_TICK_POLICY_MACRO,
+  resolveBenchmarkTickPolicy,
+  createBenchmarkDelayTick,
   formatMs,
   formatCount,
   percentile,

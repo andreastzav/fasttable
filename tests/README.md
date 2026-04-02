@@ -5,7 +5,7 @@
 - `tests/node/parity.test.mjs`: parity checks between `packages/core/src` and `packages/core/dist` for generation/filtering/sorting.
 - `tests/node/io-roundtrip.test.mjs`: in-memory + file roundtrip checks for binary I/O.
 - `tests/node/benchmark-smoke.test.mjs`: benchmark engine smoke tests against runtime APIs.
-- `tests/node/orchestration-smoke.test.mjs`: orchestration-module export + fallback smoke (`src` and `dist`) including filter runtime bridge, sort runtime bridge, shared precomputed sorting runtime, and sort benchmark runtime bridge.
+- `tests/node/orchestration-smoke.test.mjs`: orchestration-module export + fallback smoke (`src` and `dist`) including filter runtime bridge, filtering runtime orchestrator, sort runtime bridge, shared precomputed sorting runtime, and sort benchmark runtime bridge.
 - `tests/node/generation-workers-browser-export-smoke.test.mjs`: browser worker adapter export/attach smoke.
 - `tests/node/generation-workers-node-smoke.test.mjs`: Node `worker_threads` generation + sort-precompute smoke.
 - `tests/node/helpers.mjs`: shared test helpers.

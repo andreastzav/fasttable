@@ -1,3 +1,8 @@
+import {
+  createBenchmarkDelayTick,
+  resolveBenchmarkTickPolicy,
+} from "@fasttable/core/benchmark";
+
 function getBenchmarkApiFromWindow() {
   if (typeof window === "undefined") {
     return null;
@@ -21,10 +26,29 @@ function setAllActionButtonsDisabled(disabled, primaryBtnEl, currentBtnEl) {
   }
 }
 
-function delayBenchmarkTick() {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+function readGlobalBenchmarkTickPolicy() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return typeof window.fastTableBenchmarkTickPolicy === "string"
+    ? window.fastTableBenchmarkTickPolicy
+    : "";
+}
+
+function createUiBenchmarkDelayTick(input) {
+  const requestedPolicy =
+    input && typeof input.tickPolicy === "function"
+      ? input.tickPolicy()
+      : input
+        ? input.tickPolicy
+        : "";
+  const fallbackPolicy = "macro";
+  const resolvedPolicy = resolveBenchmarkTickPolicy(
+    requestedPolicy || readGlobalBenchmarkTickPolicy(),
+    fallbackPolicy
+  );
+  return createBenchmarkDelayTick(resolvedPolicy);
 }
 
 function renderBenchmarkLines(statusEl, lines) {
@@ -79,15 +103,16 @@ function bindBenchmarkUi(options) {
       typeof input.getBenchmarkApi === "function"
         ? input.getBenchmarkApi()
         : getBenchmarkApiFromWindow();
+    const delayTick = createUiBenchmarkDelayTick(input);
 
     setAllActionButtonsDisabled(true, primaryBtnEl, currentBtnEl);
     try {
       // Yield once so busy state/cursor can repaint before heavy benchmark setup.
-      await delayBenchmarkTick();
+      await delayTick();
       const result = await runBenchmark({
         api,
         currentOnly: currentOnly === true,
-        delayTick: delayBenchmarkTick,
+        delayTick,
         now: () => performance.now(),
         onUpdate(lines) {
           renderBenchmarkLines(

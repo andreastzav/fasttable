@@ -172,6 +172,7 @@ Core package:
 - `packages/core/src/generation.js`: dataset generation + derived representations.
 - `packages/core/src/filtering.js`: filtering controllers and dictionary/planner logic.
 - `packages/core/src/filtering-orchestration.js`: shared filtering orchestration/cache logic consumed by browser and CLI/runtime adapters.
+- `packages/core/src/filtering-runtime-orchestration.js`: shared filter+sort pass orchestration used by browser wrappers to keep UI glue thin.
 - `packages/core/src/filter-runtime-bridge.js`: shared runtime-facing filtering bridge used by browser app and runtime/CLI adapters.
 - `packages/core/src/sorting.js`: sort controllers and index/typed comparator paths.
 - `packages/core/src/sorting-precomputed-runtime.js`: shared precomputed sorting runtime (typed-array-first) reused by browser/runtime/CLI benchmark paths.

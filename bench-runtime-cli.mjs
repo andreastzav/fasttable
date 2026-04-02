@@ -1,9 +1,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createFastTableRuntime } from "./packages/core/dist/runtime.js";
+import { createFastTableEngine } from "./packages/core/dist/engine.js";
 import { loadColumnarBinaryPreset } from "./packages/core/dist/io-node.js";
 import { fastTableGenerationWorkersNodeApi } from "./packages/core/dist/generation-workers-node.js";
 import {
+  createBenchmarkDelayTick,
+  resolveBenchmarkTickPolicy,
   runFilteringBenchmark,
   runSortBenchmark,
 } from "./packages/core/dist/benchmark.js";
@@ -22,6 +25,7 @@ function parseArgs(argv) {
     generateWorkers: 0,
     precomputeSortWorkers: false,
     sortMode: "",
+    tickPolicy: "micro",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -85,6 +89,11 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
+    if (token === "--tick" && i + 1 < argv.length) {
+      args.tickPolicy = String(argv[i + 1]).trim().toLowerCase();
+      i += 1;
+      continue;
+    }
     if (token === "--help" || token === "-h") {
       args.help = true;
       continue;
@@ -111,6 +120,7 @@ function printHelp() {
   console.log("  --workers <n>          Worker count for generation/precompute (default: 4)");
   console.log("  --chunk-size <n>       Worker generation chunk size (default: 10000)");
   console.log("  --sort-mode <name>     native | timsort | precomputed (force current sorting mode)");
+  console.log("  --tick <policy>        micro | macro (benchmark delay tick policy, default: micro)");
   console.log("  --precompute-sort-workers");
   console.log("                         Precompute sorted indices using worker_threads");
   console.log("  -h, --help             Show this help");
@@ -200,49 +210,54 @@ function createCliBenchmarkApi(runtime, forcedSortMode) {
     getNumericColumnarData: () => runtime.getNumericColumnarForSave(),
     isValidNumericColumnarData,
   });
-
-  return {
-    hasData: () => runtime.hasData(),
-    getRowCount: () => runtime.getRowCount(),
-    getModeOptions: () => runtime.getModeOptions(),
-    setModeOptions: (nextOptions, switchOptions) =>
-      runtime.setModeOptions(nextOptions, switchOptions),
-    getRawFilters: () => runtime.getRawFilters(),
-    setRawFilters: (rawFilters) => runtime.setRawFilters(rawFilters),
-    setSingleFilter: (columnKey, value) => runtime.setSingleFilter(columnKey, value),
-    clearFilters: () => runtime.clearFilters(),
-    runFilterPass: (options) => runtime.runFilterPass(options),
-    runSingleFilterPass: (columnKey, value, options) =>
-      runtime.runSingleFilterPass(columnKey, value, options),
-    runFilterPassWithRawFilters: (rawFilters, options) =>
-      runtime.runFilterPassWithRawFilters(rawFilters, options),
-    getSortModes: () =>
-      effectiveForcedMode !== ""
-        ? [effectiveForcedMode]
-        : availableSortModes.slice(),
-    getSortMode: () =>
-      effectiveForcedMode !== "" ? effectiveForcedMode : runtime.getSortMode(),
-    getSortOptions: () => runtime.getSortOptions(),
-    setSortOptions: (nextSortOptions) => runtime.setSortOptions(nextSortOptions),
-    buildSortRowsSnapshot: (rawFilters) =>
-      sortBenchmarkRuntimeBridge.buildSortRowsSnapshot(rawFilters),
-    runSortSnapshotPass: (rowsSnapshot, descriptors, sortMode) => {
-      const requestedMode =
-        typeof sortMode === "string" && sortMode.trim() !== ""
-          ? sortMode.trim().toLowerCase()
-          : effectiveForcedMode !== ""
-            ? effectiveForcedMode
-            : runtime.getSortMode();
-      return sortBenchmarkRuntimeBridge.runSortSnapshotPass(
-        rowsSnapshot,
-        descriptors,
-        requestedMode
-      );
+  const engine = createFastTableEngine({
+    adapters: {
+      hasData: () => runtime.hasData(),
+      getRowCount: () => runtime.getRowCount(),
+      getModeOptions: () => runtime.getModeOptions(),
+      setModeOptions: (nextOptions, switchOptions) =>
+        runtime.setModeOptions(nextOptions, switchOptions),
+      getRawFilters: () => runtime.getRawFilters(),
+      setRawFilters: (rawFilters) => runtime.setRawFilters(rawFilters),
+      setSingleFilter: (columnKey, value) =>
+        runtime.setSingleFilter(columnKey, value),
+      clearFilters: () => runtime.clearFilters(),
+      runFilterPass: (options) => runtime.runFilterPass(options),
+      runSingleFilterPass: (columnKey, value, options) =>
+        runtime.runSingleFilterPass(columnKey, value, options),
+      runFilterPassWithRawFilters: (rawFilters, options) =>
+        runtime.runFilterPassWithRawFilters(rawFilters, options),
+      getSortModes: () =>
+        effectiveForcedMode !== ""
+          ? [effectiveForcedMode]
+          : availableSortModes.slice(),
+      getSortMode: () =>
+        effectiveForcedMode !== "" ? effectiveForcedMode : runtime.getSortMode(),
+      getSortOptions: () => runtime.getSortOptions(),
+      setSortOptions: (nextSortOptions) =>
+        runtime.setSortOptions(nextSortOptions),
+      buildSortRowsSnapshot: (rawFilters) =>
+        sortBenchmarkRuntimeBridge.buildSortRowsSnapshot(rawFilters),
+      runSortSnapshotPass: (rowsSnapshot, descriptors, sortMode) => {
+        const requestedMode =
+          typeof sortMode === "string" && sortMode.trim() !== ""
+            ? sortMode.trim().toLowerCase()
+            : effectiveForcedMode !== ""
+              ? effectiveForcedMode
+              : runtime.getSortMode();
+        return sortBenchmarkRuntimeBridge.runSortSnapshotPass(
+          rowsSnapshot,
+          descriptors,
+          requestedMode
+        );
+      },
+      prewarmPrecomputedSortState: () =>
+        sortBenchmarkRuntimeBridge.prewarmPrecomputedSortState(),
+      isTimSortAvailable: () => availableSortModes.includes("timsort"),
     },
-    prewarmPrecomputedSortState: () =>
-      sortBenchmarkRuntimeBridge.prewarmPrecomputedSortState(),
-    isTimSortAvailable: () => availableSortModes.includes("timsort"),
-  };
+  });
+
+  return engine.createBenchmarkApi();
 }
 
 async function main() {
@@ -340,6 +355,9 @@ async function main() {
   }
 
   const benchmarkApi = createCliBenchmarkApi(runtime, args.sortMode);
+  const delayTick = createBenchmarkDelayTick(
+    resolveBenchmarkTickPolicy(args.tickPolicy, "micro")
+  );
 
   const outputSections = [];
 
@@ -350,6 +368,7 @@ async function main() {
       api: benchmarkApi,
       currentOnly: args.currentOnly,
       rounds: args.rounds,
+      delayTick,
       onUpdate: createLinePrinter("filter"),
     });
     outputSections.push(filtering.lines.join("\n"));
@@ -371,6 +390,7 @@ async function main() {
       api: benchmarkApi,
       currentOnly: args.currentOnly,
       rounds: args.rounds,
+      delayTick,
       onUpdate: createLinePrinter("sort"),
     });
     outputSections.push(sorting.lines.join("\n"));
