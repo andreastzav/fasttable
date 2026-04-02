@@ -1,4 +1,4 @@
-import { fastTableGenerationApi } from "@fasttable/core/generation";
+import { fastTableGenerationApi } from "@fasttable/core";
 
 if (typeof window !== "undefined") {
   window.fastTableGeneration = fastTableGenerationApi;

@@ -1,8 +1,8 @@
-import { createFastTableRuntime } from "@fasttable/core/runtime";
 import {
+  createFastTableRuntime,
   runFilteringBenchmark,
   runSortBenchmark,
-} from "@fasttable/core/benchmark";
+} from "@fasttable/core";
 
 const statusEl = document.getElementById("status");
 const outputEl = document.getElementById("output");

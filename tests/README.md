@@ -6,6 +6,7 @@
 - `tests/node/io-roundtrip.test.mjs`: in-memory + file roundtrip checks for binary I/O.
 - `tests/node/benchmark-smoke.test.mjs`: benchmark engine smoke tests against runtime APIs.
 - `tests/node/orchestration-smoke.test.mjs`: orchestration-module export + fallback smoke (`src` and `dist`) including filter runtime bridge, filtering runtime orchestrator, sort runtime bridge, shared precomputed sorting runtime, sort benchmark runtime bridge, and benchmark runtime adapter.
+- `tests/node/hardcut-refactor.test.mjs`: hard-cut regression tests for runtime-backed engine ownership, no direct browser runtime mutation paths, benchmark restore contract, tick-policy default parity, and one-shot `runtime-cli.mjs` smoke.
 - `tests/node/generation-workers-browser-export-smoke.test.mjs`: browser worker adapter export/attach smoke.
 - `tests/node/generation-workers-node-smoke.test.mjs`: Node `worker_threads` generation + sort-precompute smoke.
 - `tests/node/helpers.mjs`: shared test helpers.
@@ -27,11 +28,16 @@ node tests/node/parity.test.mjs
 node tests/node/io-roundtrip.test.mjs
 node tests/node/benchmark-smoke.test.mjs
 node tests/node/orchestration-smoke.test.mjs
+node tests/node/hardcut-refactor.test.mjs
 node tests/node/generation-workers-browser-export-smoke.test.mjs
 node tests/node/generation-workers-node-smoke.test.mjs
 ```
 
 Use the fallback when `node --test ...` fails with `spawn EPERM` in restricted environments.
+
+Note for `tests/node/hardcut-refactor.test.mjs`:
+
+- the `runtime-cli.mjs` smoke subtest is skipped automatically when child-process spawn is blocked (`EPERM`) in sandboxed environments.
 
 The Node suite covers:
 

@@ -1,4 +1,4 @@
-import { fastTableFilteringApi } from "@fasttable/core/filtering";
+import { fastTableFilteringApi } from "@fasttable/core";
 
 if (typeof window !== "undefined") {
   window.fastTableFiltering = fastTableFilteringApi;

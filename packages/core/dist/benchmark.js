@@ -286,12 +286,52 @@ function validateFilteringApi(api) {
     typeof api.setModeOptions !== "function" ||
     typeof api.getRawFilters !== "function" ||
     typeof api.setRawFilters !== "function" ||
-    typeof api.runFilterPass !== "function" ||
-    typeof api.runSingleFilterPass !== "function" ||
+    (typeof api.runFilterCore !== "function" &&
+      typeof api.runFilterPass !== "function" &&
+      typeof api.executeFilterCore !== "function" &&
+      typeof api.runSingleFilterPass !== "function") ||
+    typeof api.restoreStateCore !== "function" ||
     typeof api.getRowCount !== "function"
   ) {
     throw new Error("Benchmark API not available.");
   }
+}
+
+function executeFilteringBenchmarkPass(api, columnKey, value) {
+  const rawFilters = {};
+  rawFilters[columnKey] = value;
+
+  if (typeof api.runFilterCore === "function") {
+    const coreRun = api.runFilterCore(rawFilters, {
+      rawFilters,
+      skipRender: true,
+      skipStatus: true,
+      keepScroll: false,
+      preferPrecomputedFastPath: false,
+    });
+    if (
+      !coreRun ||
+      coreRun.kind !== "ok" ||
+      !coreRun.orchestration ||
+      !coreRun.orchestration.filterResult
+    ) {
+      return null;
+    }
+
+    return coreRun.orchestration.filterResult;
+  }
+
+  if (typeof api.executeFilterCore === "function") {
+    return api.executeFilterCore(rawFilters, {
+      skipRender: true,
+      skipStatus: true,
+    });
+  }
+
+  return api.runSingleFilterPass(columnKey, value, {
+    skipRender: true,
+    skipStatus: true,
+  });
 }
 
 async function runFilteringBenchmark(options) {
@@ -374,10 +414,11 @@ async function runFilteringBenchmark(options) {
             valueIndex += 1
           ) {
             const value = benchCase.values[valueIndex];
-            const result = api.runSingleFilterPass(benchCase.key, value, {
-              skipRender: true,
-              skipStatus: true,
-            });
+            const result = executeFilteringBenchmarkPass(
+              api,
+              benchCase.key,
+              value
+            );
             if (!result) {
               throw new Error("Failed to run benchmark filter pass.");
             }
@@ -442,10 +483,24 @@ async function runFilteringBenchmark(options) {
       `Benchmark failed: ${String(err && err.message ? err.message : err)}`
     );
   } finally {
-    api.setModeOptions(originalModeOptions, { suppressFilterPass: true });
-    api.setRawFilters(originalFilters);
-    await delayTick();
-    api.runFilterPass();
+    try {
+      await api.restoreStateCore({
+        modeOptions: originalModeOptions,
+        rawFilters: originalFilters,
+      });
+      await delayTick();
+    } catch (restoreError) {
+      if (!error) {
+        error = restoreError;
+      }
+      reporter.append(
+        `Benchmark restore failed: ${String(
+          restoreError && restoreError.message
+            ? restoreError.message
+            : restoreError
+        )}`
+      );
+    }
   }
 
   return {
@@ -576,10 +631,84 @@ function validateSortApi(api) {
   if (
     typeof api.getRowCount !== "function" ||
     typeof api.buildSortRowsSnapshot !== "function" ||
-    typeof api.runSortSnapshotPass !== "function"
+    (typeof api.runSortSnapshotCore !== "function" &&
+      typeof api.runSortCore !== "function" &&
+      typeof api.executeSortCore !== "function" &&
+      typeof api.runSortSnapshotPass !== "function") ||
+    typeof api.restoreStateCore !== "function"
   ) {
     throw new Error("Sort benchmark API not available.");
   }
+}
+
+function executeSortBenchmarkPass(api, snapshotPayload, descriptors, sortMode) {
+  if (typeof api.runSortSnapshotCore === "function") {
+    const coreRun = api.runSortSnapshotCore(snapshotPayload, descriptors, sortMode, {
+      rawFilters: {},
+      skipRender: true,
+      skipStatus: true,
+      keepScroll: false,
+      preferPrecomputedFastPath: false,
+    });
+    if (
+      !coreRun ||
+      !coreRun.result
+    ) {
+      return null;
+    }
+
+    return {
+      sortCoreMs: Number(coreRun.result.durationMs) || 0,
+      sortTotalMs: Number(coreRun.sortTotalMs) || Number(coreRun.result.durationMs) || 0,
+      sortPrepMs: Number(coreRun.sortPrepMs) || 0,
+      sortMode:
+        coreRun.result && typeof coreRun.result.sortMode === "string"
+          ? coreRun.result.sortMode
+          : sortMode,
+      sortedCount: Number(coreRun.sortedCount) || 0,
+      sortedIndices: coreRun.indices,
+    };
+  }
+
+  if (typeof api.runSortCore === "function") {
+    const coreRun = api.runSortCore(null, descriptors, sortMode, {
+      rawFilters: {},
+      skipRender: true,
+      skipStatus: true,
+      keepScroll: false,
+      preferPrecomputedFastPath: false,
+    });
+    if (
+      !coreRun ||
+      coreRun.kind !== "ok" ||
+      !coreRun.sortRun ||
+      !coreRun.sortRun.result
+    ) {
+      return null;
+    }
+
+    return {
+      sortCoreMs: Number(coreRun.sortRun.result.durationMs) || 0,
+      sortTotalMs:
+        Number(coreRun.sortRun.sortTotalMs) ||
+        Number(coreRun.sortRun.result.durationMs) ||
+        0,
+      sortPrepMs: Number(coreRun.sortRun.sortPrepMs) || 0,
+      sortMode:
+        coreRun.sortRun.result &&
+        typeof coreRun.sortRun.result.sortMode === "string"
+          ? coreRun.sortRun.result.sortMode
+          : sortMode,
+      sortedCount: Number(coreRun.sortRun.sortedCount) || 0,
+      sortedIndices: coreRun.sortRun.indices,
+    };
+  }
+
+  if (typeof api.executeSortCore === "function") {
+    return api.executeSortCore(snapshotPayload, descriptors, sortMode);
+  }
+
+  return api.runSortSnapshotPass(snapshotPayload, descriptors, sortMode);
 }
 
 async function runSortBenchmark(options) {
@@ -709,7 +838,8 @@ async function runSortBenchmark(options) {
               benchCase,
               direction
             );
-            const result = api.runSortSnapshotPass(
+            const result = executeSortBenchmarkPass(
+              api,
               snapshotPayload,
               descriptors,
               sortMode
@@ -792,8 +922,21 @@ async function runSortBenchmark(options) {
       `Sort benchmark failed: ${String(err && err.message ? err.message : err)}`
     );
   } finally {
-    if (typeof api.setSortOptions === "function") {
-      api.setSortOptions(originalSortOptions);
+    try {
+      await api.restoreStateCore({
+        sortOptions: originalSortOptions,
+      });
+    } catch (restoreError) {
+      if (!error) {
+        error = restoreError;
+      }
+      reporter.append(
+        `Sort benchmark restore failed: ${String(
+          restoreError && restoreError.message
+            ? restoreError.message
+            : restoreError
+        )}`
+      );
     }
   }
 

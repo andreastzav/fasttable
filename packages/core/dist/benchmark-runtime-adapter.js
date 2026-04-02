@@ -34,6 +34,11 @@ function createBenchmarkRuntimeAdapter(options) {
       : null;
   const restoreStateHook =
     typeof hooks.restoreState === "function" ? hooks.restoreState : null;
+  if (!restoreStateHook && typeof api.restoreStateCore !== "function") {
+    throw new Error(
+      "Benchmark runtime adapter requires api.restoreStateCore or hooks.restoreState."
+    );
+  }
 
   function restoreStateCore(statePatch) {
     const patch = toObject(statePatch);
@@ -41,21 +46,7 @@ function createBenchmarkRuntimeAdapter(options) {
       return restoreStateHook(patch);
     }
 
-    if (typeof api.restoreStateCore === "function") {
-      return api.restoreStateCore(patch);
-    }
-
-    if (Object.prototype.hasOwnProperty.call(patch, "modeOptions")) {
-      callApiMethod(api, "setModeOptions", [patch.modeOptions || {}, { suppressFilterPass: true }], null);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, "rawFilters")) {
-      callApiMethod(api, "setRawFilters", [patch.rawFilters || {}], null);
-    }
-    if (Object.prototype.hasOwnProperty.call(patch, "sortOptions")) {
-      callApiMethod(api, "setSortOptions", [patch.sortOptions || {}], null);
-    }
-
-    return null;
+    return api.restoreStateCore(patch);
   }
 
   return {
@@ -102,6 +93,26 @@ function createBenchmarkRuntimeAdapter(options) {
         null
       );
     },
+    runFilterCore(rawFilters, options) {
+      return callApiMethod(api, "runFilterCore", [rawFilters, options], null);
+    },
+    executeFilterCore(rawFilters, options) {
+      const result = callApiMethod(
+        api,
+        "executeFilterCore",
+        [rawFilters, options],
+        undefined
+      );
+      if (result !== undefined) {
+        return result;
+      }
+      return callApiMethod(
+        api,
+        "runFilterPassWithRawFilters",
+        [rawFilters, options],
+        null
+      );
+    },
     getSortModes() {
       return callApiMethod(api, "getSortModes", [], ["native"]);
     },
@@ -123,6 +134,42 @@ function createBenchmarkRuntimeAdapter(options) {
     runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
       if (beforeRunSortSnapshotPass) {
         beforeRunSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
+      }
+      return callApiMethod(
+        api,
+        "runSortSnapshotPass",
+        [rowsSnapshot, descriptors, sortMode],
+        null
+      );
+    },
+    runSortSnapshotCore(rowsSnapshot, descriptors, sortMode, options) {
+      return callApiMethod(
+        api,
+        "runSortSnapshotCore",
+        [rowsSnapshot, descriptors, sortMode, options],
+        null
+      );
+    },
+    runSortCore(filterResult, descriptors, sortMode, options) {
+      return callApiMethod(
+        api,
+        "runSortCore",
+        [filterResult, descriptors, sortMode, options],
+        null
+      );
+    },
+    executeSortCore(rowsSnapshot, descriptors, sortMode) {
+      if (beforeRunSortSnapshotPass) {
+        beforeRunSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
+      }
+      const result = callApiMethod(
+        api,
+        "executeSortCore",
+        [rowsSnapshot, descriptors, sortMode],
+        undefined
+      );
+      if (result !== undefined) {
+        return result;
       }
       return callApiMethod(
         api,

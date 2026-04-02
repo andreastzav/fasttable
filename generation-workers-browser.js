@@ -1,7 +1,7 @@
 import {
   fastTableGenerationWorkersBrowserApi,
   attachGenerationWorkersBrowserApi,
-} from "@fasttable/core/generation-workers-browser";
+} from "@fasttable/core";
 
 if (typeof window !== "undefined") {
   attachGenerationWorkersBrowserApi(window);

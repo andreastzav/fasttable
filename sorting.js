@@ -1,7 +1,7 @@
 import {
   fastTableSortingApi,
   registerSortMethod,
-} from "@fasttable/core/sorting";
+} from "@fasttable/core";
 
 function getGlobalSortMethod(globalName) {
   if (

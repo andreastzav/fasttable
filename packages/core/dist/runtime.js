@@ -23,6 +23,14 @@ import { createSortRuntimeBridge } from "./sort-runtime-bridge.js";
 import {
   convertNumericColumnarDataToObjectRows,
 } from "./io.js";
+import {
+  runFilterPassWithRawFiltersUsingBridge,
+  runFilterPassUsingBridge,
+  runSingleFilterPassUsingBridge,
+  buildSortRowsSnapshotUsingFilter,
+  runSortSnapshotPassUsingBridge,
+  restoreRuntimeStateFromSetters,
+} from "./execution-core.js";
 
 function defaultNow() {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -533,48 +541,43 @@ function createFastTableRuntime(options) {
   }
 
   function runFilterPassWithRawFilters(nextRawFilters, options) {
-    if (!filterRuntimeBridge || !hasData()) {
-      lastFilterResult = null;
-      return null;
-    }
-
-    const executionOptions = options || {};
-    const result = filterRuntimeBridge.runFilterPassWithRawFilters(
+    return runFilterPassWithRawFiltersUsingBridge(
+      {
+        hasData: () => !!filterRuntimeBridge && hasData(),
+        runBridgeFilterPass(rawFilters, executionOptions) {
+          return filterRuntimeBridge.runFilterPassWithRawFilters(
+            rawFilters,
+            executionOptions
+          );
+        },
+        setLastFilterResult(nextResult) {
+          lastFilterResult = nextResult;
+        },
+      },
       nextRawFilters,
-      executionOptions
+      options
     );
-    if (!result) {
-      if (executionOptions.updateState !== false) {
-        lastFilterResult = null;
-      }
-      return null;
-    }
-
-    if (executionOptions.updateState !== false) {
-      lastFilterResult = result;
-    }
-
-    return result;
   }
 
   function runFilterPass(options) {
-    return runFilterPassWithRawFilters(rawFilters, options);
+    return runFilterPassUsingBridge(
+      {
+        getRawFilters: () => rawFilters,
+        runFilterPassWithRawFilters,
+      },
+      options
+    );
   }
 
   function runSingleFilterPass(columnKey, value, options) {
-    const singleFilters = {};
-    if (
-      typeof columnKey === "string" &&
-      columnKey !== "" &&
-      String(value ?? "").trim() !== ""
-    ) {
-      singleFilters[columnKey] = String(value);
-    }
-
-    return runFilterPassWithRawFilters(singleFilters, {
-      ...(options || {}),
-      updateState: false,
-    });
+    return runSingleFilterPassUsingBridge(
+      {
+        runFilterPassWithRawFilters,
+      },
+      columnKey,
+      value,
+      options
+    );
   }
 
   function getSortOptions() {
@@ -604,31 +607,35 @@ function createFastTableRuntime(options) {
   }
 
   function buildSortRowsSnapshot(nextRawFilters) {
-    const raw =
-      nextRawFilters && typeof nextRawFilters === "object"
-        ? nextRawFilters
-        : rawFilters;
-    const filterResult = runFilterPassWithRawFilters(raw, { updateState: false });
-    const rowCount = getRowCount();
-    const indices = materializeFilteredIndices(
-      filterResult ? filterResult.filteredIndices : null,
-      rowCount
+    return buildSortRowsSnapshotUsingFilter(
+      {
+        getRawFilters: () => rawFilters,
+        runFilterPassWithRawFilters,
+        getRowCount,
+        materializeFilteredIndices,
+      },
+      nextRawFilters
     );
-
-    return {
-      snapshotType: "row-indices-v2",
-      rowIndices: indices,
-      count: indices.length,
-      filterCoreMs: filterResult ? filterResult.coreMs : 0,
-    };
   }
 
   function runSortSnapshotPass(rowsSnapshot, descriptors, sortModeOverride) {
-    if (!sortRuntimeBridge) {
-      return null;
-    }
-
-    return sortRuntimeBridge.runSortSnapshotPass(
+    return runSortSnapshotPassUsingBridge(
+      {
+        runBridgeSortPass(
+          sortRowsSnapshot,
+          sortDescriptors,
+          sortMode
+        ) {
+          if (!sortRuntimeBridge) {
+            return null;
+          }
+          return sortRuntimeBridge.runSortSnapshotPass(
+            sortRowsSnapshot,
+            sortDescriptors,
+            sortMode
+          );
+        },
+      },
       rowsSnapshot,
       descriptors,
       sortModeOverride
@@ -653,6 +660,59 @@ function createFastTableRuntime(options) {
 
   function getLastFilterResult() {
     return lastFilterResult;
+  }
+
+  function restoreStateCore(statePatch) {
+    return restoreRuntimeStateFromSetters(
+      {
+        setModeOptions,
+        setRawFilters,
+        setSortOptions,
+        setSortMode,
+        getModeOptions,
+        getRawFilters,
+        getSortOptions,
+        getSortMode,
+      },
+      statePatch
+    );
+  }
+
+  function hasTopLevelFilterCacheEntries() {
+    return filterRuntimeBridge
+      ? filterRuntimeBridge.hasTopLevelFilterCacheEntries()
+      : false;
+  }
+
+  function clearTopLevelFilterCache() {
+    if (filterRuntimeBridge) {
+      filterRuntimeBridge.clearTopLevelFilterCache();
+    }
+  }
+
+  function clearTopLevelSmartFilterState() {
+    if (filterRuntimeBridge) {
+      filterRuntimeBridge.clearTopLevelSmartFilterState();
+    }
+  }
+
+  function clearAllFilterCaches() {
+    if (filterRuntimeBridge) {
+      filterRuntimeBridge.clearAllFilterCaches();
+    }
+  }
+
+  function bumpTopLevelFilterCacheRevision() {
+    if (filterRuntimeBridge) {
+      filterRuntimeBridge.bumpTopLevelFilterCacheRevision();
+    }
+  }
+
+  function getTopLevelFilterCacheSnapshot() {
+    if (filterRuntimeBridge) {
+      return filterRuntimeBridge.getTopLevelFilterCacheSnapshot();
+    }
+    return null;
   }
 
   filterRuntimeBridge = createFilterRuntimeBridge({
@@ -748,6 +808,13 @@ function createFastTableRuntime(options) {
     runSortSnapshotPass,
     prewarmPrecomputedSortState,
     getNumericColumnarForSave,
+    restoreStateCore,
+    hasTopLevelFilterCacheEntries,
+    clearTopLevelFilterCache,
+    clearTopLevelSmartFilterState,
+    clearAllFilterCaches,
+    bumpTopLevelFilterCacheRevision,
+    getTopLevelFilterCacheSnapshot,
   };
 }
 

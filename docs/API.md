@@ -12,6 +12,7 @@ Main source files in `packages/core/src`:
 - `filtering.js`: filtering controllers and dictionary/planner paths.
 - `filtering-orchestration.js`: shared filtering orchestration/cache layer for browser and CLI adapters.
 - `filtering-runtime-orchestration.js`: shared filter+sort runtime-pass orchestration used by browser wrappers and adapters.
+- `filter-sort-runtime-orchestration.js`: shared normal-flow filter/sort core orchestration used by thin browser wrappers.
 - `filter-runtime-bridge.js`: shared runtime-facing filtering execution bridge for browser and CLI/runtime adapters.
 - `sorting.js`: sort controllers, typed comparators, index sorting.
 - `sorting-precomputed-runtime.js`: shared precomputed sorting runtime used by runtime/CLI/browser benchmark adapters.
@@ -24,7 +25,7 @@ Main source files in `packages/core/src`:
 - `generation-worker-protocol.js`: shared worker message protocol.
 - `generation-workers-shared.js`: shared worker orchestration logic reused by browser and Node adapters.
 - `generation-workers-browser.js`, `generation-workers-node.js`: browser/Node worker adapters.
-- `engine.js`: app-agnostic orchestration facade around runtime adapters.
+- `engine.js`: canonical caller-facing core API surface (runtime-backed).
 - `index.js`: package re-export surface.
 
 Build output:
@@ -52,6 +53,7 @@ Build output:
   - `@fasttable/core/filtering`
   - `@fasttable/core/filtering-orchestration`
   - `@fasttable/core/filtering-runtime-orchestration`
+  - `@fasttable/core/filter-sort-runtime-orchestration`
   - `@fasttable/core/filter-runtime-bridge`
   - `@fasttable/core/sorting`
   - `@fasttable/core/sorting-orchestration`
@@ -90,6 +92,7 @@ Build output:
 - `@fasttable/core/filtering`
 - `@fasttable/core/filtering-orchestration`
 - `@fasttable/core/filtering-runtime-orchestration`
+- `@fasttable/core/filter-sort-runtime-orchestration`
 - `@fasttable/core/filter-runtime-bridge`
 - `@fasttable/core/sorting`
 - `@fasttable/core/sorting-precomputed-runtime`
@@ -114,6 +117,7 @@ Build output:
 For integrations, prefer these:
 
 - `@fasttable/core/runtime`
+- `@fasttable/core/engine`
 - `@fasttable/core/benchmark`
 - `@fasttable/core/benchmark-runtime-adapter`
 - `@fasttable/core/io`
@@ -122,7 +126,15 @@ For integrations, prefer these:
 - `@fasttable/core/io-browser`
 
 These provide the lowest-friction app/CLI integration path.
-`@fasttable/core` itself is runtime-neutral and does not include environment-specific adapters.
+For browser static hosting, `@fasttable/core` can be mapped as a single import-map entry and used as the root import surface.
+Node-only adapters remain explicit subpaths (for example `@fasttable/core/io-node`, `@fasttable/core/generation-workers-node`).
+
+## Core ownership contract
+
+- `engine` is the canonical caller-facing core API for app/CLI wrappers.
+- `runtime` is the execution backend that engine owns internally.
+- Wrappers should call engine methods for filter/sort/snapshot/state operations.
+- Benchmark wrappers should consume `engine.createBenchmarkApi()` (optionally via `benchmark-runtime-adapter`).
 
 ## Runtime API (`@fasttable/core/runtime`)
 
@@ -157,6 +169,44 @@ Returned runtime object:
 - `runSortSnapshotPass(rowsSnapshot, descriptors, sortMode?) -> sortResult`
 - `prewarmPrecomputedSortState() -> boolean`
 - `getNumericColumnarForSave() -> numericColumnarData | null`
+- `restoreStateCore(statePatch) -> { modeOptions, rawFilters, sortOptions, sortMode }`
+
+## Engine API (`@fasttable/core/engine`, experimental)
+
+Factory:
+
+- `createFastTableEngine({ runtime, adapters? })`
+
+Canonical methods (runtime-backed):
+
+- state/data:
+  - `hasData() -> boolean`
+  - `getRowCount() -> number`
+  - `getModeOptions() -> object`
+  - `setModeOptions(options, switchOptions?) -> object`
+  - `getRawFilters() -> object`
+  - `setRawFilters(rawFilters) -> object`
+  - `clearFilters() -> object`
+  - `getSortModes() -> string[]`
+  - `getSortMode() -> string`
+  - `setSortMode(mode) -> string`
+  - `getSortOptions() -> object`
+  - `setSortOptions(options) -> object`
+  - `setDataFromRows(rows) -> number`
+  - `setDataFromNumericColumnar(numericColumnarData) -> number`
+- core execution:
+  - `executeFilterCore(rawFilters, options?) -> filterResult`
+  - `buildSortRowsSnapshot(rawFilters?) -> snapshot`
+  - `executeSortCore(snapshot, descriptors, sortMode?) -> sortResult`
+  - `restoreStateCore(statePatch) -> stateSnapshot`
+- filter cache management:
+  - `hasTopLevelFilterCacheEntries() -> boolean`
+  - `clearTopLevelFilterCache()`
+  - `clearTopLevelSmartFilterState()`
+  - `clearAllFilterCaches()`
+  - `bumpTopLevelFilterCacheRevision()`
+- benchmark:
+  - `createBenchmarkApi() -> benchmarkApi`
 
 Filter result shape:
 
@@ -195,6 +245,12 @@ Return shape (both):
 Important:
 
 - `api` must implement required methods (runtime already does).
+- Filtering benchmark pass execution prefers `executeFilterCore` when available, with `runSingleFilterPass` fallback.
+- Sorting benchmark pass execution prefers `executeSortCore` when available, with `runSortSnapshotPass` fallback.
+- Required restore contract for both benchmark runners:
+  - `api.restoreStateCore(statePatch)`
+  - benchmark core restores through this method in `finally`.
+- Benchmark core no longer runs legacy direct restore sequences (`setModeOptions` + `setRawFilters` + `runFilterPass`) in `finally`.
 - Validation failures throw immediately.
 - Runtime execution failures are captured in `error` and also appended in `lines`.
 
@@ -208,8 +264,8 @@ Purpose:
 
 - Wraps a benchmark API with one shared contract for:
   - sort snapshot build
+  - sort core execution (`executeSortCore`, with `runSortSnapshotPass` fallback)
   - prewarm
-  - sort pass execution
   - state restore
 - Used by both browser and CLI wrappers so benchmark orchestration stays portable.
 
@@ -220,7 +276,7 @@ Optional hooks:
 - `hooks.beforePrewarmSortState()`
 - `hooks.restoreState(statePatch)`
 
-If no restore hook is provided, adapter tries `api.restoreStateCore(...)` first, then falls back to `setModeOptions`/`setRawFilters`/`setSortOptions` when available.
+If no restore hook is provided, adapter requires `api.restoreStateCore(...)` and throws if missing (no legacy fallback restore path).
 
 ## IO API (`@fasttable/core/io`, `@fasttable/core/io-node`)
 
@@ -295,20 +351,24 @@ Use an import map (for static hosting):
 <script type="importmap">
 {
   "imports": {
-    "@fasttable/core/runtime": "./packages/core/dist/runtime.js",
-    "@fasttable/core/benchmark": "./packages/core/dist/benchmark.js"
+    "@fasttable/core": "./packages/core/dist/index.js"
   }
 }
 </script>
 ```
 
 ```js
-import { createFastTableRuntime } from "@fasttable/core/runtime";
-import { runFilteringBenchmark } from "@fasttable/core/benchmark";
+import {
+  createFastTableRuntime,
+  createFastTableEngine,
+  runFilteringBenchmark,
+} from "@fasttable/core";
 
 const runtime = createFastTableRuntime();
+const engine = createFastTableEngine({ runtime });
+
 runtime.generate(100000);
-runtime.setModeOptions({
+engine.setModeOptions({
   useColumnarData: true,
   useBinaryColumnar: true,
   useDictionaryKeySearch: true,
@@ -316,11 +376,10 @@ runtime.setModeOptions({
   useSmarterPlanner: true,
 });
 
-runtime.setRawFilters({ firstName: "andr" });
-const filterResult = runtime.runFilterPass();
+const filterResult = engine.executeFilterCore({ firstName: "andr" });
 
 const benchmark = await runFilteringBenchmark({
-  api: runtime,
+  api: engine.createBenchmarkApi(),
   currentOnly: true,
   rounds: 1,
   onUpdate(lines) {
@@ -336,7 +395,7 @@ Optional browser worker adapter usage:
 import {
   fastTableGenerationWorkersBrowserApi,
   attachGenerationWorkersBrowserApi,
-} from "@fasttable/core/generation-workers-browser";
+} from "@fasttable/core";
 
 attachGenerationWorkersBrowserApi(window);
 
@@ -352,10 +411,12 @@ const generated =
 
 ```js
 import { createFastTableRuntime } from "@fasttable/core/runtime";
+import { createFastTableEngine } from "@fasttable/core/engine";
 import { loadColumnarBinaryPreset } from "@fasttable/core/io-node";
 import { runFilteringBenchmark } from "@fasttable/core/benchmark";
 
 const runtime = createFastTableRuntime();
+const engine = createFastTableEngine({ runtime });
 const schema = runtime.getSchema();
 
 const loaded = await loadColumnarBinaryPreset({
@@ -364,10 +425,10 @@ const loaded = await loadColumnarBinaryPreset({
   rowCount: 1000000,
 });
 
-runtime.setDataFromNumericColumnar(loaded.numericColumnarData);
+engine.setDataFromNumericColumnar(loaded.numericColumnarData);
 
 const result = await runFilteringBenchmark({
-  api: runtime,
+  api: engine.createBenchmarkApi(),
   currentOnly: true,
   rounds: 3,
 });
@@ -395,5 +456,11 @@ const precomputed =
 
 Existing CLI script in this repo:
 
-- `node bench-runtime-cli.mjs --preset 1000000 --bench filtering --current --rounds 3`
-- `node bench-runtime-cli.mjs --preset 1000000 --bench sorting --current --sort-mode precomputed --rounds 3`
+- `node benchmark-cli.mjs --preset 1000000 --bench filtering --current --rounds 3`
+- `node benchmark-cli.mjs --preset 1000000 --bench sorting --current --sort-mode precomputed --rounds 3`
+
+One-shot normal runtime CLI in this repo:
+
+- `node runtime-cli.mjs --op filter --preset 1000000 --filters firstName=andr`
+- `node runtime-cli.mjs --op sort --preset 1000000 --sort firstName:desc,lastName:asc --sort-mode precomputed`
+- `node runtime-cli.mjs --op filter-sort --preset 1000000 --filters firstName=andr --sort firstName:desc,lastName:asc --sort-mode precomputed`

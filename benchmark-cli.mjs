@@ -107,7 +107,7 @@ function printHelp() {
   console.log("FastTable runtime benchmark CLI");
   console.log("");
   console.log("Usage:");
-  console.log("  node bench-runtime-cli.mjs [options]");
+  console.log("  node benchmark-cli.mjs [options]");
   console.log("");
   console.log("Options:");
   console.log("  --preset <rows>        Preset row count (default: 1000000)");
@@ -153,32 +153,9 @@ async function maybeWriteOutput(outPath, sections) {
   console.log(`Saved benchmark output to: ${absolutePath}`);
 }
 
-function buildCliSortModes(runtime) {
-  const baseModes =
-    runtime && typeof runtime.getSortModes === "function"
-      ? runtime.getSortModes()
-      : ["native"];
-  const modeSet = Object.create(null);
-  const modes = [];
-
-  for (let i = 0; i < baseModes.length; i += 1) {
-    const mode = typeof baseModes[i] === "string" ? baseModes[i].trim() : "";
-    if (mode === "" || modeSet[mode] === true) {
-      continue;
-    }
-    modeSet[mode] = true;
-    modes.push(mode);
-  }
-
-  if (modes.length === 0) {
-    modes.push("native");
-  }
-
-  return modes;
-}
-
-function createCliBenchmarkApi(runtime, forcedSortMode) {
-  const availableSortModes = buildCliSortModes(runtime);
+function createCliBenchmarkApi(engine, forcedSortMode) {
+  const benchmarkApi = engine.createBenchmarkApi();
+  const availableSortModes = benchmarkApi.getSortModes();
   const normalizedForcedMode =
     typeof forcedSortMode === "string" && forcedSortMode.trim() !== ""
       ? forcedSortMode.trim().toLowerCase()
@@ -188,35 +165,29 @@ function createCliBenchmarkApi(runtime, forcedSortMode) {
     availableSortModes.includes(normalizedForcedMode)
       ? normalizedForcedMode
       : "";
+  if (effectiveForcedMode !== "") {
+    benchmarkApi.restoreStateCore({ sortMode: effectiveForcedMode });
+  }
+  if (effectiveForcedMode === "") {
+    return benchmarkApi;
+  }
 
-  const engine = createFastTableEngine({
-    runtime,
-    adapters: {
-      hasData: () => runtime.hasData(),
-      getRowCount: () => runtime.getRowCount(),
-      getModeOptions: () => runtime.getModeOptions(),
-      setModeOptions: (nextOptions, switchOptions) =>
-        runtime.setModeOptions(nextOptions, switchOptions),
-      getRawFilters: () => runtime.getRawFilters(),
-      setRawFilters: (rawFilters) => runtime.setRawFilters(rawFilters),
-      setSingleFilter: (columnKey, value) =>
-        runtime.setSingleFilter(columnKey, value),
-      clearFilters: () => runtime.clearFilters(),
-      runFilterPass: (options) => runtime.runFilterPass(options),
-      getSortModes: () =>
-        effectiveForcedMode !== ""
-          ? [effectiveForcedMode]
-          : availableSortModes.slice(),
-      getSortMode: () =>
-        effectiveForcedMode !== "" ? effectiveForcedMode : runtime.getSortMode(),
-      getSortOptions: () => runtime.getSortOptions(),
-      setSortOptions: (nextSortOptions) =>
-        runtime.setSortOptions(nextSortOptions),
-      isTimSortAvailable: () => availableSortModes.includes("timsort"),
+  return {
+    ...benchmarkApi,
+    getSortModes() {
+      return [effectiveForcedMode];
     },
-  });
-
-  return engine.createBenchmarkApi();
+    getSortMode() {
+      return effectiveForcedMode;
+    },
+    restoreStateCore(statePatch) {
+      const patch =
+        statePatch && typeof statePatch === "object"
+          ? { ...statePatch, sortMode: effectiveForcedMode }
+          : { sortMode: effectiveForcedMode };
+      return benchmarkApi.restoreStateCore(patch);
+    },
+  };
 }
 
 async function main() {
@@ -241,6 +212,10 @@ async function main() {
   }
 
   const runtime = createFastTableRuntime();
+  const engine = createFastTableEngine({
+    runtime,
+    adapters: {},
+  });
   const schema = runtime.getSchema();
 
   if (args.generateWorkers > 0) {
@@ -256,9 +231,9 @@ async function main() {
         chunkSize: args.chunkSize,
       }
     );
-    runtime.setDataFromNumericColumnar(generated.derivedData.numericColumnarData);
+    engine.setDataFromNumericColumnar(generated.derivedData.numericColumnarData);
     console.log(
-      `Generated ${runtime
+      `Generated ${engine
         .getRowCount()
         .toLocaleString("en-US")} rows in ${generated.wallMs.toFixed(2)} ms.`
     );
@@ -270,12 +245,12 @@ async function main() {
       presetDir,
       rowCount: args.preset,
     });
-    runtime.setDataFromNumericColumnar(loaded.numericColumnarData);
-    console.log(`Loaded ${runtime.getRowCount().toLocaleString("en-US")} rows.`);
+    engine.setDataFromNumericColumnar(loaded.numericColumnarData);
+    console.log(`Loaded ${engine.getRowCount().toLocaleString("en-US")} rows.`);
   }
 
   if (args.precomputeSortWorkers) {
-    const numericColumnarData = runtime.getNumericColumnarForSave();
+    const numericColumnarData = engine.getNumericColumnarForSave();
     if (!numericColumnarData) {
       throw new Error("No numeric columnar data available for sort precompute.");
     }
@@ -291,7 +266,7 @@ async function main() {
 
     numericColumnarData.sortedIndexColumns = sortPrecompute.sortedIndexColumns;
     numericColumnarData.sortedIndexByKey = sortPrecompute.sortedIndexByKey;
-    runtime.setDataFromNumericColumnar(numericColumnarData);
+    engine.setDataFromNumericColumnar(numericColumnarData);
 
     console.log(
       `Precomputed ${sortPrecompute.completedColumns}/${
@@ -300,7 +275,7 @@ async function main() {
     );
   }
 
-  const availableSortModes = buildCliSortModes(runtime);
+  const availableSortModes = engine.getSortModes();
   if (
     typeof args.sortMode === "string" &&
     args.sortMode.trim() !== "" &&
@@ -314,7 +289,7 @@ async function main() {
   }
 
   const benchmarkApi = createBenchmarkRuntimeAdapter({
-    api: createCliBenchmarkApi(runtime, args.sortMode),
+    api: createCliBenchmarkApi(engine, args.sortMode),
   });
   const delayTick = createBenchmarkDelayTick(
     resolveBenchmarkTickPolicy(args.tickPolicy, "micro")

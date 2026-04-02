@@ -3,7 +3,7 @@ import {
   parseColumnarBinaryMetadataText,
   decodeColumnarBinaryData,
   convertNumericColumnarDataToObjectRows,
-} from "@fasttable/core/io";
+} from "@fasttable/core";
 import {
   formatByteSize,
   createBinaryBlob,
@@ -12,7 +12,7 @@ import {
   readFileAsArrayBuffer,
   readUrlAsText,
   readUrlAsArrayBuffer,
-} from "@fasttable/core/io-browser";
+} from "@fasttable/core";
 
 (function () {
   const saveObjectBtnEl = document.getElementById("saveObjectBtn");

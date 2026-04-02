@@ -9,6 +9,7 @@ Core ESM modules for FastTable generation, filtering, sorting, I/O, runtime orch
 - Sorting controllers with pluggable sort modes
 - Binary table codec + browser/node adapters
 - Headless runtime (`createFastTableRuntime`) for browser or Node
+- Canonical core API surface (`createFastTableEngine`) for wrappers
 - Benchmark engines for filtering/sorting telemetry
 
 ## Public entrypoints
@@ -30,7 +31,8 @@ Core ESM modules for FastTable generation, filtering, sorting, I/O, runtime orch
 - `@fasttable/core/generation-workers-node` (experimental)
 - `@fasttable/core/io-adapter` (conditional browser/node)
 
-`@fasttable/core` is runtime-neutral and does not re-export environment-specific adapters.
+`@fasttable/core` is the canonical root surface and re-exports browser-safe APIs/adapters for one-line browser import-map usage.
+Node-only adapters remain explicit subpaths (for example `@fasttable/core/io-node`, `@fasttable/core/generation-workers-node`).
 
 ## Build
 
@@ -51,14 +53,18 @@ npm run build
 ## Minimal usage
 
 ```js
-import { createFastTableRuntime } from "@fasttable/core/runtime";
-import { runFilteringBenchmark } from "@fasttable/core/benchmark";
+import {
+  createFastTableRuntime,
+  createFastTableEngine,
+  runFilteringBenchmark,
+} from "@fasttable/core";
 
 const runtime = createFastTableRuntime();
+const engine = createFastTableEngine({ runtime });
 runtime.generate(100000);
 
 const benchmark = await runFilteringBenchmark({
-  api: runtime,
+  api: engine.createBenchmarkApi(),
   currentOnly: true,
   rounds: 1,
 });
@@ -92,7 +98,7 @@ const precomputed =
 import {
   fastTableGenerationWorkersBrowserApi,
   attachGenerationWorkersBrowserApi,
-} from "@fasttable/core/generation-workers-browser";
+} from "@fasttable/core";
 
 attachGenerationWorkersBrowserApi(window);
 

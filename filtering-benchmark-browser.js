@@ -1,5 +1,5 @@
-import { runFilteringBenchmark } from "@fasttable/core/benchmark";
-import { bindBenchmarkUi } from "./benchmark-ui.js";
+import { runFilteringBenchmark } from "@fasttable/core";
+import { bindBenchmarkUi } from "./benchmark-ui-browser.js";
 
 (function () {
   if (typeof document === "undefined") {

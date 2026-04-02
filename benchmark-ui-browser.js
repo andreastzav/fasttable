@@ -2,7 +2,7 @@ import { createBenchmarkRuntimeAdapter } from "@fasttable/core";
 import {
   createBenchmarkDelayTick,
   resolveBenchmarkTickPolicy,
-} from "@fasttable/core/benchmark";
+} from "@fasttable/core";
 
 function getBenchmarkApiFromWindow() {
   if (typeof window === "undefined") {
@@ -44,7 +44,7 @@ function createUiBenchmarkDelayTick(input) {
       : input
         ? input.tickPolicy
         : "";
-  const fallbackPolicy = "macro";
+  const fallbackPolicy = "micro";
   const resolvedPolicy = resolveBenchmarkTickPolicy(
     requestedPolicy || readGlobalBenchmarkTickPolicy(),
     fallbackPolicy

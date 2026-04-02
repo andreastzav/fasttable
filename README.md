@@ -65,23 +65,25 @@ Table generation uses web workers by default, but filtering and sorting run on t
 
 The core package now includes a headless runtime facade:
 
-- `createFastTableRuntime` from `@fasttable/core/runtime`
+- `createFastTableRuntime` from `@fasttable/core`
 
 This runtime owns table dataset state and filter/sort orchestration without any DOM dependency, so the same logic can be used from browser adapters and from Node/CLI.
 
 Worker adapters are also available in core:
 
-- Browser: `@fasttable/core/generation-workers-browser`
+- Browser: `@fasttable/core` (re-exported browser-safe adapter)
 - Node: `@fasttable/core/generation-workers-node`
 - Conditional alias: `@fasttable/core/generation-workers`
 
 I/O adapters are available as:
 
-- Browser: `@fasttable/core/io-browser`
+- Browser: `@fasttable/core` (re-exported)
 - Node: `@fasttable/core/io-node`
 - Conditional alias: `@fasttable/core/io-adapter`
 
-`@fasttable/core` root export is runtime-neutral; environment-specific adapters are consumed via the explicit/conditional subpaths above.
+For browser static hosting, the app now uses a single import-map entry:
+
+- `@fasttable/core` -> `./packages/core/dist/index.js`
 
 ### Execution ownership contract
 
@@ -89,9 +91,13 @@ I/O adapters are available as:
   - `executeFilterCore(...)`
   - `executeSortCore(...)`
   - `restoreStateCore(...)`
+- Engine core execution is runtime-backed (hard-cut):
+  - core filter/sort/snapshot/restore paths require runtime methods.
+  - adapters stay for UI/IO integration, telemetry wiring, and environment hooks.
 - Browser and CLI wrappers are thin orchestration layers:
   - Browser wrappers read UI state + render telemetry/DOM.
   - CLI wrapper parses args + prints/saves output.
+  - Wrappers route filter/sort/snapshot/state mutations through engine methods (not direct runtime mutation calls).
 - Benchmark runners use the shared benchmark adapter contract so snapshot/prewarm/sort-pass/restore behavior is centralized and reusable.
 
 ### Build core dist (no npm needed)
@@ -122,28 +128,46 @@ git config core.hooksPath .githooks
 Use the runtime CLI script:
 
 ```bash
-node bench-runtime-cli.mjs --preset 1000000 --bench filtering --current --rounds 3
+node benchmark-cli.mjs --preset 1000000 --bench filtering --current --rounds 3
 ```
 
 Force sorting benchmark mode (native, timsort, or precomputed):
 
 ```bash
-node bench-runtime-cli.mjs --preset 1000000 --bench sorting --current --sort-mode precomputed --rounds 3
+node benchmark-cli.mjs --preset 1000000 --bench sorting --current --sort-mode precomputed --rounds 3
 ```
 
 Optional text output:
 
 ```bash
-node bench-runtime-cli.mjs --preset 1000000 --bench both --current --rounds 3 --out runtime-benchmark.txt
+node benchmark-cli.mjs --preset 1000000 --bench both --current --rounds 3 --out runtime-benchmark.txt
 ```
 
 Optional worker_threads path in CLI:
 
 ```bash
-node bench-runtime-cli.mjs --generate-workers 1000000 --workers 4 --chunk-size 10000 --precompute-sort-workers --bench filtering --current --rounds 3
+node benchmark-cli.mjs --generate-workers 1000000 --workers 4 --chunk-size 10000 --precompute-sort-workers --bench filtering --current --rounds 3
 ```
 
 This uses the Node worker adapter from `@fasttable/core/generation-workers-node` for generation and sort-index precompute.
+
+### One-shot Node runtime CLI (normal runs)
+
+Use one-shot non-interactive operations through the same engine core path:
+
+```bash
+node runtime-cli.mjs --op filter --preset 1000000 --filters firstName=andr
+node runtime-cli.mjs --op sort --preset 1000000 --sort firstName:desc,lastName:asc --sort-mode precomputed
+node runtime-cli.mjs --op filter-sort --preset 1000000 --filters firstName=andr --sort firstName:desc,lastName:asc --sort-mode precomputed
+```
+
+JSON output:
+
+```bash
+node runtime-cli.mjs --op filter --preset 1000000 --filters firstName=andr --json
+```
+
+`runtime-cli.mjs` exits with code `1` on invalid input or core execution failure.
 
 ### Portability tests
 
@@ -171,11 +195,12 @@ Use this as the quick "which file should I edit?" guide.
 - `index.html`: browser app shell + import map + script wiring.
 - `styles.css`: browser UI styling.
 - `app.js`: main browser controller (DOM, state wiring, rendering flow).
-- `generation.js`, `filtering.js`, `sorting.js`, `io.js`: browser adapters that bridge the UI to core package APIs.
-- `generation-workers.js`: thin browser adapter that exposes worker APIs on `window.fastTableGenerationWorkers`.
-- `filtering-benchmark.js`, `sorting-benchmark.js`: browser benchmark UI wrappers.
+- `generation.js`, `filtering.js`, `sorting.js`, `io-browser.js`: browser adapters that bridge the UI to core package APIs.
+- `generation-workers-browser.js`: thin browser adapter that exposes worker APIs on `window.fastTableGenerationWorkers`.
+- `filtering-benchmark-browser.js`, `sorting-benchmark-browser.js`: browser benchmark UI wrappers.
 - `table-rendering.js`: table render/update helpers used by the browser app.
-- `bench-runtime-cli.mjs`: Node CLI benchmark runner (preset load + benchmark output).
+- `benchmark-cli.mjs`: Node CLI benchmark runner (preset load + benchmark output).
+- `runtime-cli.mjs`: Node one-shot normal-run CLI (`filter` / `sort` / `filter-sort`) using engine core execution.
 - `build-core.mjs`: builds `packages/core/dist` from `packages/core/src`.
 
 Core package:

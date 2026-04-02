@@ -31,13 +31,13 @@ test("browser worker adapter attach helper is safe in node", () => {
   assert.equal(attached, false);
 });
 
-test("root dist entrypoint is runtime-neutral", () => {
+test("root dist entrypoint re-exports browser-safe adapters only", () => {
   assert.equal(
     Object.prototype.hasOwnProperty.call(
       coreRoot,
       "fastTableGenerationWorkersBrowserApi"
     ),
-    false
+    true
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(
@@ -48,7 +48,7 @@ test("root dist entrypoint is runtime-neutral", () => {
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(coreRoot, "createColumnarBinaryExportBlobs"),
-    false
+    true
   );
   assert.equal(
     Object.prototype.hasOwnProperty.call(coreRoot, "saveColumnarBinaryFiles"),

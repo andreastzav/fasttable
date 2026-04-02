@@ -18,6 +18,8 @@ let srcSortBenchmarkRuntimeBridge;
 let distSortBenchmarkRuntimeBridge;
 let srcBenchmarkRuntimeAdapter;
 let distBenchmarkRuntimeAdapter;
+let srcFilterSortRuntimeOrchestration;
+let distFilterSortRuntimeOrchestration;
 let srcRuntime;
 let distRuntime;
 
@@ -72,6 +74,12 @@ before(async () => {
   distBenchmarkRuntimeAdapter = await import(
     "../../packages/core/dist/benchmark-runtime-adapter.js"
   );
+  srcFilterSortRuntimeOrchestration = await import(
+    "../../packages/core/src/filter-sort-runtime-orchestration.js"
+  );
+  distFilterSortRuntimeOrchestration = await import(
+    "../../packages/core/dist/filter-sort-runtime-orchestration.js"
+  );
   srcRuntime = await import("../../packages/core/src/runtime.js");
   distRuntime = await import("../../packages/core/dist/runtime.js");
 });
@@ -123,6 +131,14 @@ test("orchestration modules export expected factories in src and dist", () => {
   );
   assert.equal(
     typeof distBenchmarkRuntimeAdapter.createBenchmarkRuntimeAdapter,
+    "function"
+  );
+  assert.equal(
+    typeof srcFilterSortRuntimeOrchestration.createEngineFilterSortOrchestrator,
+    "function"
+  );
+  assert.equal(
+    typeof distFilterSortRuntimeOrchestration.createEngineFilterSortOrchestrator,
     "function"
   );
   assert.equal(
@@ -331,6 +347,88 @@ test("filtering runtime orchestrator smoke works for src and dist", () => {
   );
   runFilteringRuntimeOrchestratorSmoke(
     distFilteringRuntimeOrchestration.createFilteringRuntimeOrchestrator
+  );
+});
+
+function runFilterSortRuntimeOrchestratorSmoke(factory) {
+  const engine = {
+    executeFilterCore(rawFilters) {
+      const active = Object.keys(rawFilters || {}).length > 0;
+      return {
+        modePath: "numeric-columnar",
+        filteredCount: active ? 2 : 3,
+        filteredIndices: active
+          ? { buffer: new Uint32Array([0, 2]), count: 2 }
+          : null,
+        coreMs: 1.2,
+        active,
+        dictionaryPrefilter: active
+          ? {
+              used: true,
+              durationMs: 0.4,
+              searchMs: 0.1,
+              searchFullMs: 0.06,
+              searchRefinedMs: 0.04,
+              mergeMs: 0.2,
+              mergeConcatMs: 0.08,
+              mergeSortMs: 0.12,
+              intersectionMs: 0.1,
+            }
+          : null,
+        selectedBaseCandidateCount: 3,
+      };
+    },
+    buildSortRowsSnapshot() {
+      return {
+        snapshotType: "row-indices-v2",
+        rowIndices: new Uint32Array([0, 2]),
+        count: 2,
+      };
+    },
+    executeSortCore(rowsSnapshot, descriptors, sortMode) {
+      return {
+        sortedIndices: rowsSnapshot.rowIndices,
+        sortedCount: rowsSnapshot.count,
+        sortMode: sortMode || "precomputed",
+        descriptors,
+        sortCoreMs: 0.2,
+        sortPrepMs: 0,
+        sortTotalMs: 0.2,
+      };
+    },
+  };
+
+  const orchestrator = factory({
+    engine,
+    getRowCount: () => 3,
+    getRawFilters: () => ({ firstName: "a" }),
+    getFilterOptions: () => ({ useDictionaryKeySearch: true }),
+    getCurrentFilterModeKey: () => "numeric-columnar",
+    getSortDescriptors: () => [{ columnKey: "firstName", direction: "desc" }],
+    getSortMode: () => "precomputed",
+    syncState: () => {},
+  });
+
+  const filterRun = orchestrator.runFilterCore(
+    { firstName: "a" },
+    { skipRender: false, skipStatus: false }
+  );
+  assert.ok(filterRun && filterRun.kind === "ok");
+  assert.equal(filterRun.orchestration.filteredCount, 2);
+  assert.ok(filterRun.orchestration.sort && typeof filterRun.orchestration.sort === "object");
+
+  const sortRun = orchestrator.runSortCore(null, {});
+  assert.ok(sortRun && sortRun.kind === "ok");
+  assert.ok(ArrayBuffer.isView(sortRun.renderIndices));
+  assert.equal(sortRun.sortRun.sortedCount, 2);
+}
+
+test("filter/sort runtime orchestrator smoke works for src and dist", () => {
+  runFilterSortRuntimeOrchestratorSmoke(
+    srcFilterSortRuntimeOrchestration.createEngineFilterSortOrchestrator
+  );
+  runFilterSortRuntimeOrchestratorSmoke(
+    distFilterSortRuntimeOrchestration.createEngineFilterSortOrchestrator
   );
 });
 

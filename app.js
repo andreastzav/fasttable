@@ -1,10 +1,8 @@
-import { createFastTableEngine } from "@fasttable/core/engine";
-import { createFilterRuntimeBridge } from "@fasttable/core/filter-runtime-bridge";
-import { createSortRuntimeBridge } from "@fasttable/core/sort-runtime-bridge";
+import { createFastTableEngine, createFastTableRuntime } from "@fasttable/core";
 import {
   ensureNumericColumnarSortedIndices as ensureCoreNumericColumnarSortedIndices,
   ensureNumericColumnarSortedRanks as ensureCoreNumericColumnarSortedRanks,
-} from "@fasttable/core/io";
+} from "@fasttable/core";
 
 const {
   COLUMN_NAMES: columnNames,
@@ -24,14 +22,7 @@ const {
 const tableRenderingApi = window.fastTableRendering || null;
 const generationWorkersApi = window.fastTableGenerationWorkers || null;
 const sortingApi = window.fastTableSorting || null;
-const {
-  createRowFilterController,
-  createColumnarFilterController,
-  createNumericRowFilterController,
-  createNumericColumnarFilterController,
-  buildDictionaryKeySearchPrefilter,
-  precomputeDictionaryKeySearchState,
-} = window.fastTableFiltering;
+const { precomputeDictionaryKeySearchState } = window.fastTableFiltering;
 
 const rowCountEl = document.getElementById("rowCount");
 const useWorkerGenerationEl = document.getElementById("useWorkerGeneration");
@@ -89,21 +80,6 @@ const previewBodyEl = document.getElementById("previewBody");
 const previewTableWrapEl = document.querySelector(".tableWrap");
 const appVersionBadgeEl = document.getElementById("appVersionBadge");
 
-const objectRowFilterController = createRowFilterController([]);
-const objectColumnarFilterController = createColumnarFilterController(null);
-const numericRowFilterController = createNumericRowFilterController([], {
-  keyToIndex: columnIndexByKey,
-  baseColumnCount,
-  cacheOffset: numericCacheOffset,
-});
-const numericColumnarFilterController = createNumericColumnarFilterController(
-  null,
-  {
-    keyToIndex: columnIndexByKey,
-    baseColumnCount,
-    cacheOffset: numericCacheOffset,
-  }
-);
 const sortColumnTypeByKey = buildSortColumnTypeByKey(columnKeys);
 const sortController =
   sortingApi &&
@@ -126,6 +102,8 @@ let cachedNumericRows = null;
 
 let cachedNumericColumnarData = null;
 let fastTableEngine = null;
+let runtimeOperations = null;
+const browserCoreRuntime = createFastTableRuntime();
 
 let currentRepresentation = "numeric";
 let currentLayout = "row";
@@ -136,55 +114,8 @@ let actionButtonsDisableCounter = 0;
 const MAX_VIRTUAL_VISIBLE_ROWS = 15;
 const DEFAULT_WORKER_COUNT = 4;
 const DEFAULT_WORKER_CHUNK_SIZE = 10000;
-const PRECOMPUTED_GROUP_MIN_DESCRIPTOR_COUNT = 2;
-const PRECOMPUTED_FULL_GROUP_MAX_GROUPS = 250000;
-const TOP_LEVEL_FILTER_CACHE_MIN_INSERT_MS = 4;
 const FILTER_PASS_PREFER_PRECOMPUTED_SORT = true;
-const TOP_LEVEL_FILTER_CACHE_SMALL_MAX_RESULTS = 50000;
-const TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS = 500000;
-const TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY = 100;
-const TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY = 50;
 const objectCacheKeys = columnKeys.map((key) => `${key}Cache`);
-const filterRuntimeBridge = createFilterRuntimeBridge({
-  now: () => performance.now(),
-  getLoadedRowCount,
-  getCurrentFilterModeKey,
-  getFilterOptions,
-  getRawFilters: readRawFilters,
-  normalizeRawFilters: (rawFilters) =>
-    rawFilters && typeof rawFilters === "object" ? rawFilters : {},
-  controllers: {
-    objectRow: objectRowFilterController,
-    objectColumnar: objectColumnarFilterController,
-    numericRow: numericRowFilterController,
-    numericColumnar: numericColumnarFilterController,
-  },
-  dataAccessors: {
-    getObjectRows: ensureObjectRowsAvailable,
-    getObjectColumnarData: () =>
-      cachedObjectColumnarData !== null
-        ? cachedObjectColumnarData
-        : getOrBuildObjectColumnarData().columnarData,
-    getNumericRows: () => getOrBuildNumericRows().numericRows,
-    getNumericColumnarData: getNumericColumnarDataForDictionaryKeySearch,
-  },
-  buildDictionaryKeySearchPrefilter,
-  keyToIndex: columnIndexByKey,
-  isValidNumericColumnarData,
-  modePathByKey: {
-    "binary-columnar": "numeric-columnar",
-    "object-columnar": "object-columnar",
-    "numeric-row": "numeric-rows",
-    "object-row": "object-rows",
-  },
-  syncAllControllerIndices: true,
-  onCacheStateChange: syncClearFilterCacheButtonState,
-  topLevelFilterCacheMinInsertMs: TOP_LEVEL_FILTER_CACHE_MIN_INSERT_MS,
-  topLevelFilterCacheSmallMaxResults: TOP_LEVEL_FILTER_CACHE_SMALL_MAX_RESULTS,
-  topLevelFilterCacheMediumMaxResults: TOP_LEVEL_FILTER_CACHE_MEDIUM_MAX_RESULTS,
-  topLevelFilterCacheSmallCapacity: TOP_LEVEL_FILTER_CACHE_SMALL_CAPACITY,
-  topLevelFilterCacheMediumCapacity: TOP_LEVEL_FILTER_CACHE_MEDIUM_CAPACITY,
-});
 const virtualPreviewRenderer =
   tableRenderingApi &&
   typeof tableRenderingApi.createVirtualTableRenderer === "function" &&
@@ -198,17 +129,6 @@ const virtualPreviewRenderer =
         rowHeight: 34,
       })
     : null;
-const appSortRuntimeBridge = createSortRuntimeBridge({
-  now: () => performance.now(),
-  columnKeys,
-  columnIndexByKey,
-  columnTypeByKey: sortColumnTypeByKey,
-  getSortOptions: getSortRuntimeOptions,
-  getSortMode,
-  getRowCount: getLoadedRowCount,
-  getSchema: getFastTableSchema,
-  getNumericColumnarData: getNumericColumnarForSave,
-});
 
 function formatMs(value) {
   const numeric = Number(value);
@@ -368,21 +288,6 @@ function getSortRuntimeOptions() {
     useTypedComparator: shouldUseTypedSortComparator(),
     useIndexSort: shouldUseIndexSort(),
   };
-}
-
-function setSortRuntimeOptions(nextOptions) {
-  const options = nextOptions || {};
-
-  if (
-    useTypedSortComparatorEl &&
-    typeof options.useTypedComparator === "boolean"
-  ) {
-    useTypedSortComparatorEl.checked = options.useTypedComparator;
-  }
-
-  if (useIndexSortEl && typeof options.useIndexSort === "boolean") {
-    useIndexSortEl.checked = options.useIndexSort;
-  }
 }
 
 function createZeroGenerationMetrics() {
@@ -616,7 +521,11 @@ function syncWorkerGenerationControls() {
 }
 
 function hasTopLevelFilterCacheEntries() {
-  return filterRuntimeBridge.hasTopLevelFilterCacheEntries();
+  return (
+    fastTableEngine &&
+    typeof fastTableEngine.hasTopLevelFilterCacheEntries === "function" &&
+    fastTableEngine.hasTopLevelFilterCacheEntries()
+  );
 }
 
 function syncClearFilterCacheButtonState() {
@@ -629,15 +538,30 @@ function syncClearFilterCacheButtonState() {
 }
 
 function clearTopLevelFilterCache() {
-  filterRuntimeBridge.clearTopLevelFilterCache();
+  if (
+    fastTableEngine &&
+    typeof fastTableEngine.clearTopLevelFilterCache === "function"
+  ) {
+    fastTableEngine.clearTopLevelFilterCache();
+  }
 }
 
 function clearTopLevelSmartFilterState() {
-  filterRuntimeBridge.clearTopLevelSmartFilterState();
+  if (
+    fastTableEngine &&
+    typeof fastTableEngine.clearTopLevelSmartFilterState === "function"
+  ) {
+    fastTableEngine.clearTopLevelSmartFilterState();
+  }
 }
 
 function bumpTopLevelFilterCacheRevision() {
-  filterRuntimeBridge.bumpTopLevelFilterCacheRevision();
+  if (
+    fastTableEngine &&
+    typeof fastTableEngine.bumpTopLevelFilterCacheRevision === "function"
+  ) {
+    fastTableEngine.bumpTopLevelFilterCacheRevision();
+  }
 }
 
 function getCurrentFilterModeKey() {
@@ -657,7 +581,12 @@ function getCurrentFilterModeKey() {
 }
 
 function clearAllFilterCaches() {
-  filterRuntimeBridge.clearAllFilterCaches();
+  if (
+    fastTableEngine &&
+    typeof fastTableEngine.clearAllFilterCaches === "function"
+  ) {
+    fastTableEngine.clearAllFilterCaches();
+  }
 }
 
 function setSortTelemetryStatus(text) {
@@ -678,26 +607,6 @@ function getSortMode() {
   }
 
   return "native";
-}
-
-function getAvailableSortModes() {
-  if (!sortModeEl) {
-    return ["native"];
-  }
-
-  const modes = [];
-  for (let i = 0; i < sortModeEl.options.length; i += 1) {
-    const option = sortModeEl.options[i];
-    if (option.disabled) {
-      continue;
-    }
-    const optionValue = option.value;
-    if (optionValue) {
-      modes.push(optionValue);
-    }
-  }
-
-  return modes.length > 0 ? modes : ["native"];
 }
 
 function isTimSortAvailable() {
@@ -843,108 +752,6 @@ function setSortTelemetryFromResult(sortResult, sortedCount, extraMetrics) {
   }
 }
 
-function normalizeSortDirection(direction) {
-  if (direction === "asc") {
-    return "asc";
-  }
-
-  return "desc";
-}
-
-function normalizeSortDescriptorList(descriptors) {
-  if (!Array.isArray(descriptors)) {
-    return [];
-  }
-
-  const out = [];
-  for (let i = 0; i < descriptors.length; i += 1) {
-    const descriptor = descriptors[i];
-    if (!descriptor || typeof descriptor.columnKey !== "string") {
-      continue;
-    }
-
-    out.push({
-      columnKey: descriptor.columnKey,
-      direction: normalizeSortDirection(descriptor.direction),
-    });
-  }
-
-  return out;
-}
-
-function isSupportedRankArray(rankByRowId) {
-  return (
-    rankByRowId instanceof Uint32Array || rankByRowId instanceof Uint16Array
-  );
-}
-
-function areSortDescriptorsEqual(left, right) {
-  return (
-    !!left &&
-    !!right &&
-    left.columnKey === right.columnKey &&
-    normalizeSortDirection(left.direction) === normalizeSortDirection(right.direction)
-  );
-}
-
-function getMatchingSortDescriptorPrefixLength(leftList, rightList) {
-  const left = Array.isArray(leftList) ? leftList : [];
-  const right = Array.isArray(rightList) ? rightList : [];
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  for (; index < limit; index += 1) {
-    if (!areSortDescriptorsEqual(left[index], right[index])) {
-      break;
-    }
-  }
-  return index;
-}
-
-function areSortDescriptorListsEqual(leftList, rightList) {
-  const left = Array.isArray(leftList) ? leftList : [];
-  const right = Array.isArray(rightList) ? rightList : [];
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let i = 0; i < left.length; i += 1) {
-    if (!areSortDescriptorsEqual(left[i], right[i])) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function buildRowsSnapshotFromRawFilters(rawFilters) {
-  const sourceRawFilters =
-    rawFilters && typeof rawFilters === "object" ? rawFilters : readRawFilters();
-  const filterResult =
-    fastTableEngine && typeof fastTableEngine.executeFilterCore === "function"
-      ? fastTableEngine.executeFilterCore(sourceRawFilters, {
-          filterOptions: getFilterOptions(),
-        })
-      : filterRuntimeBridge.runFilterPassWithRawFilters(sourceRawFilters, {
-          filterOptions: getFilterOptions(),
-        });
-  const loadedRowCount = getLoadedRowCount();
-  const snapshotIndices = materializeFilteredIndexArray(
-    filterResult ? filterResult.filteredIndices : null,
-    loadedRowCount
-  );
-
-  return {
-    snapshotType: "row-indices-v2",
-    rowIndices: snapshotIndices,
-    count: snapshotIndices.length,
-    filterCoreMs: Number(filterResult && filterResult.coreMs) || 0,
-  };
-}
-
-function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
-  return appSortRuntimeBridge.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
-}
-
 function getSortSymbolForState(state) {
   if (sortingApi && typeof sortingApi.getSortSymbol === "function") {
     return sortingApi.getSortSymbol(state);
@@ -994,31 +801,22 @@ function runSortCore(filterResult, options) {
     };
   }
 
-  if (getLoadedRowCount() === 0) {
+  if (
+    !runtimeOperations ||
+    typeof runtimeOperations.runSortCore !== "function"
+  ) {
+    throw new Error("Runtime operations are unavailable.");
+  }
+  const coreRun = runtimeOperations.runSortCore(
+    filterResult,
+    executionOptions
+  );
+  if (!coreRun) {
     return {
       kind: "no-data",
     };
   }
-
-  const sourceFilterResult =
-    filterResult && typeof filterResult === "object"
-      ? filterResult
-      : getCurrentFilterResultSnapshot();
-  const sortRun = buildSortedIndicesForCurrentResult(
-    sourceFilterResult,
-    executionOptions
-  );
-  const renderIndices =
-    sortRun && hasIndexCollection(sortRun.indices)
-      ? sortRun.indices
-      : sourceFilterResult.filteredIndices;
-
-  return {
-    kind: "ok",
-    filterResult: sourceFilterResult,
-    sortRun,
-    renderIndices,
-  };
+  return coreRun;
 }
 
 function renderSortUi(coreRun, options) {
@@ -1050,8 +848,6 @@ function renderSortUi(coreRun, options) {
     const renderStartMs = performance.now();
     renderFilterResultByCurrentMode(filterResult, renderIndices, keepScroll);
     renderMs = performance.now() - renderStartMs;
-    window.fastTableFilteredRows = null;
-    window.fastTableFilteredRowIndices = renderIndices;
   }
 
   const wallMs = performance.now() - wallStartMs;
@@ -1079,8 +875,7 @@ function renderSortUi(coreRun, options) {
 function runSortFromCurrentUi(options) {
   const executionOptions = options || {};
   const wallStartMs = performance.now();
-  const sourceFilterResult =
-    executionOptions.filterResult || getCurrentFilterResultSnapshot();
+  const sourceFilterResult = executionOptions.filterResult || null;
   const coreRun = runSortCore(sourceFilterResult, executionOptions);
   return renderSortUi(
     coreRun,
@@ -1307,7 +1102,6 @@ async function precomputeSortedIndicesWithWorkersForCurrentData() {
     );
     cachedNumericColumnarData = rankPrecompute.numericColumnarData;
     const sortedRankPrecomputeMs = Number(rankPrecompute.durationMs) || 0;
-    window.fastTableNumericColumnarData = cachedNumericColumnarData;
     return {
       durationMs: sortedIndexPrecomputeMs + sortedRankPrecomputeMs,
       sortedIndexPrecomputeMs,
@@ -1363,7 +1157,6 @@ async function precomputeSortedIndicesWithWorkersForCurrentData() {
   const sortedRankPrecomputeMs = Number(rankPrecompute.durationMs) || 0;
 
   cachedNumericColumnarData = numericWithRanks;
-  window.fastTableNumericColumnarData = numericWithRanks;
 
   const baseResult = result || {
     durationMs: 0,
@@ -1382,24 +1175,10 @@ async function precomputeSortedIndicesWithWorkersForCurrentData() {
 
 function invalidateDerivedData() {
   cachedObjectColumnarData = null;
-  objectColumnarFilterController.setData(null);
 
   cachedNumericRows = null;
-  numericRowFilterController.setRows([]);
 
   cachedNumericColumnarData = null;
-  numericColumnarFilterController.setData(null);
-
-  window.fastTableColumnarData = null;
-  window.fastTableNumericRows = null;
-  window.fastTableNumericColumnarData = null;
-
-  if (
-    appSortRuntimeBridge &&
-    typeof appSortRuntimeBridge.resetPrecomputedSortState === "function"
-  ) {
-    appSortRuntimeBridge.resetPrecomputedSortState(getLoadedRowCount());
-  }
 }
 
 function getLoadedRowCount() {
@@ -1426,15 +1205,9 @@ function getLoadedRowCount() {
 
 function setObjectRowsDataset(rows) {
   objectRows = Array.isArray(rows) ? rows : [];
-  objectRowFilterController.setRows(objectRows);
   bumpTopLevelFilterCacheRevision();
   invalidateDerivedData();
-
-  window.fastTableRows = objectRows;
-  window.fastTableColumns = columnNames;
-  window.fastTableFilteredRows = null;
-  window.fastTableFilteredRowIndices = null;
-  window.fastTableLastFilterMode = null;
+  syncCoreRuntimeDataFromCurrentDataset();
 }
 
 function materializeObjectRowsFromObjectColumnar(columnarData) {
@@ -1525,14 +1298,10 @@ function ensureObjectRowsAvailable() {
     objectRows = materializeObjectRowsFromNumericColumnar(
       cachedNumericColumnarData
     );
-    objectRowFilterController.setRows(objectRows);
-    window.fastTableRows = objectRows;
     return objectRows;
   }
 
   objectRows = materializeObjectRowsFromObjectColumnar(cachedObjectColumnarData);
-  objectRowFilterController.setRows(objectRows);
-  window.fastTableRows = objectRows;
   return objectRows;
 }
 
@@ -1584,8 +1353,6 @@ function getOrBuildNumericRows() {
   cachedNumericRows = transformed.rows;
 
   cachedNumericColumnarData = null;
-  numericColumnarFilterController.setData(null);
-  window.fastTableNumericColumnarData = null;
 
   return {
     numericRows: cachedNumericRows,
@@ -1665,7 +1432,6 @@ function buildAllDerivedData() {
     const combinedDurationMs = combinedEndMs - combinedStartMs;
 
     cachedObjectColumnarData = combinedBuild.objectColumnarData;
-    objectColumnarFilterController.setData(cachedObjectColumnarData);
 
     const sortedStartMs = performance.now();
     cachedNumericColumnarData = ensureNumericColumnarCacheColumns(
@@ -1681,7 +1447,6 @@ function buildAllDerivedData() {
     );
     cachedNumericColumnarData = rankPrecompute.numericColumnarData;
     metrics.sortedRankPrecomputeMs = Number(rankPrecompute.durationMs) || 0;
-    numericColumnarFilterController.setData(cachedNumericColumnarData);
 
     metrics.columnarDerivationMs = combinedDurationMs;
     metrics.columnarCacheGenerationMs = 0;
@@ -1855,7 +1620,6 @@ function applyWorkerPrebuiltDerivedData(derivedData) {
   }
 
   cachedObjectColumnarData = objectColumnarData;
-  objectColumnarFilterController.setData(objectColumnarData);
 
   const preparedNumericColumnarData = ensureNumericColumnarCacheColumns(
     numericColumnarData
@@ -1864,12 +1628,6 @@ function applyWorkerPrebuiltDerivedData(derivedData) {
 
   cachedNumericRows = null;
   cachedNumericColumnarData = preparedNumericColumnarData;
-  numericRowFilterController.setRows([]);
-  numericColumnarFilterController.setData(preparedNumericColumnarData);
-
-  window.fastTableColumnarData = null;
-  window.fastTableNumericRows = null;
-  window.fastTableNumericColumnarData = preparedNumericColumnarData;
   return true;
 }
 
@@ -2002,148 +1760,6 @@ function getFilteredIndexAt(filteredIndices, rowOffset) {
   return filteredIndices[rowOffset];
 }
 
-function materializeFilteredIndexArray(filteredIndices, fallbackCount) {
-  const count = getFilteredIndicesCount(filteredIndices, fallbackCount);
-  const out = new Uint32Array(count);
-
-  for (let i = 0; i < count; i += 1) {
-    out[i] = Number(getFilteredIndexAt(filteredIndices, i)) >>> 0;
-  }
-
-  return out;
-}
-
-function hasIndexCollection(indices) {
-  return Array.isArray(indices) || ArrayBuffer.isView(indices);
-}
-
-function buildSortSnapshotFromFilterResult(filterResult) {
-  const loadedRowCount = getLoadedRowCount();
-  const snapshotIndices = materializeFilteredIndexArray(
-    filterResult ? filterResult.filteredIndices : null,
-    loadedRowCount
-  );
-  return {
-    snapshotType: "row-indices-v2",
-    rowIndices: snapshotIndices,
-    count: snapshotIndices.length,
-    filterCoreMs: Number(filterResult && filterResult.coreMs) || 0,
-  };
-}
-
-function buildSortedIndicesForCurrentResult(filterResult, options) {
-  if (!sortController || !fastTableEngine) {
-    return null;
-  }
-
-  const sortBuildOptions = options || {};
-  const activeDescriptors = normalizeSortDescriptorList(
-    sortController.getSortDescriptors()
-  );
-  if (activeDescriptors.length === 0) {
-    return null;
-  }
-
-  const loadedRowCount = getLoadedRowCount();
-  if (loadedRowCount <= 0) {
-    return null;
-  }
-
-  const rowsSnapshot = buildSortSnapshotFromFilterResult(filterResult);
-  const selectedSortMode = getSortMode();
-  const shouldPreferPrecomputedFastPath =
-    sortBuildOptions.preferPrecomputedFastPath === true &&
-    selectedSortMode !== "precomputed";
-
-  function normalizeRuntimeSortRun(runtimeSortRun, fallbackMode) {
-    if (!runtimeSortRun || !hasIndexCollection(runtimeSortRun.sortedIndices)) {
-      return null;
-    }
-
-    const indices = runtimeSortRun.sortedIndices;
-    const sortCoreMs = Number.isFinite(runtimeSortRun.sortCoreMs)
-      ? Number(runtimeSortRun.sortCoreMs)
-      : Number.isFinite(runtimeSortRun.sortMs)
-        ? Number(runtimeSortRun.sortMs)
-        : Number(runtimeSortRun.durationMs) || 0;
-    const sortTotalMs = Number.isFinite(runtimeSortRun.sortTotalMs)
-      ? Number(runtimeSortRun.sortTotalMs)
-      : sortCoreMs;
-    const sortPrepMs = Number.isFinite(runtimeSortRun.sortPrepMs)
-      ? Number(runtimeSortRun.sortPrepMs)
-      : sortTotalMs - sortCoreMs;
-    const telemetryDescriptors =
-      Array.isArray(runtimeSortRun.descriptors) &&
-      runtimeSortRun.descriptors.length > 0
-        ? normalizeSortDescriptorList(runtimeSortRun.descriptors)
-        : activeDescriptors;
-    const telemetrySortMode =
-      typeof runtimeSortRun.sortMode === "string" && runtimeSortRun.sortMode !== ""
-        ? runtimeSortRun.sortMode
-        : fallbackMode;
-
-    return {
-      indices,
-      sortedCount: Number.isFinite(runtimeSortRun.sortedCount)
-        ? Math.max(0, Number(runtimeSortRun.sortedCount) | 0)
-        : indices.length,
-      result: {
-        changedOrder: indices.length > 1,
-        durationMs: sortCoreMs,
-        sortMode: telemetrySortMode,
-        dataPath:
-          typeof runtimeSortRun.dataPath === "string" && runtimeSortRun.dataPath !== ""
-            ? runtimeSortRun.dataPath
-            : "indices",
-        comparatorMode:
-          typeof runtimeSortRun.comparatorMode === "string"
-            ? runtimeSortRun.comparatorMode
-            : "",
-        descriptors: telemetryDescriptors,
-        effectiveDescriptors: telemetryDescriptors,
-        restoredDefault: runtimeSortRun.restoredDefault === true,
-      },
-      sortTotalMs,
-      sortPrepMs,
-      rankBuildMs: Number(runtimeSortRun.rankBuildMs) || 0,
-    };
-  }
-
-  function runRuntimeSortPass(requestedMode) {
-    const mode =
-      typeof requestedMode === "string" && requestedMode !== ""
-        ? requestedMode
-        : selectedSortMode;
-    const runtimeSortRun =
-      fastTableEngine && typeof fastTableEngine.executeSortCore === "function"
-        ? fastTableEngine.executeSortCore(rowsSnapshot, activeDescriptors, mode)
-        : fastTableEngine.runSortSnapshotPass(
-            rowsSnapshot,
-            activeDescriptors,
-            mode
-          );
-    return normalizeRuntimeSortRun(runtimeSortRun, mode);
-  }
-
-  if (selectedSortMode === "precomputed") {
-    return runRuntimeSortPass("precomputed");
-  }
-
-  if (shouldPreferPrecomputedFastPath) {
-    const precomputedRun = runRuntimeSortPass("precomputed");
-    const precomputedMode =
-      precomputedRun &&
-      precomputedRun.result &&
-      typeof precomputedRun.result.sortMode === "string"
-        ? precomputedRun.result.sortMode
-        : "";
-    if (precomputedRun && precomputedMode.startsWith("precomputed")) {
-      return precomputedRun;
-    }
-  }
-
-  return runRuntimeSortPass(selectedSortMode);
-}
 function renderPreviewFromObjectRowIndices(rows, filteredIndices, keepScroll) {
   const totalRows = getFilteredIndicesCount(filteredIndices, rows.length);
   renderPreviewVirtual(
@@ -2268,58 +1884,6 @@ function getFilterOptions() {
   };
 }
 
-function getNumericColumnarDataForDictionaryKeySearch() {
-  if (
-    cachedNumericColumnarData !== null &&
-    isValidNumericColumnarData(cachedNumericColumnarData)
-  ) {
-    return ensureNumericColumnarCacheColumns(cachedNumericColumnarData);
-  }
-
-  if (getLoadedRowCount() === 0) {
-    return null;
-  }
-
-  const numericRowsBuild = getOrBuildNumericRows();
-  const numericColumnarBuild = getOrBuildNumericColumnarData(
-    numericRowsBuild.numericRows
-  );
-  return ensureNumericColumnarCacheColumns(numericColumnarBuild.columnarData);
-}
-
-function getCurrentFilterResultSnapshot() {
-  if (currentLayout === "columnar" && currentColumnarMode === "binary") {
-    return {
-      filteredCount: numericColumnarFilterController.getCurrentCount(),
-      filteredIndices: numericColumnarFilterController.getCurrentIndices(),
-      columnarData: numericColumnarFilterController.getData(),
-    };
-  }
-
-  if (currentLayout === "columnar") {
-    return {
-      filteredCount: objectColumnarFilterController.getCurrentCount(),
-      filteredIndices: objectColumnarFilterController.getCurrentIndices(),
-      columnarData: objectColumnarFilterController.getData(),
-    };
-  }
-
-  if (currentRepresentation === "numeric") {
-    return {
-      filteredCount: numericRowFilterController.getCurrentCount(),
-      filteredIndices: numericRowFilterController.getCurrentIndices(),
-      numericData: numericRowFilterController.getData(),
-    };
-  }
-
-  const rows = ensureObjectRowsAvailable();
-  return {
-    filteredCount: objectRowFilterController.getCurrentCount(),
-    filteredIndices: objectRowFilterController.getCurrentIndices(),
-    rows,
-  };
-}
-
 function renderFilterResultByCurrentMode(filterResult, renderIndices, keepScroll) {
   if (currentLayout === "columnar" && currentColumnarMode === "binary") {
     renderPreviewFromNumericColumnar(
@@ -2352,125 +1916,13 @@ function renderFilterResultByCurrentMode(filterResult, renderIndices, keepScroll
 }
 
 function runFilterCore(rawFilters, options) {
-  const executionOptions = options || {};
-  const skipRender = executionOptions.skipRender === true;
-  const skipStatus = executionOptions.skipStatus === true;
-  const keepScroll = executionOptions.keepScroll === true;
-  const preferPrecomputedFastPath =
-    executionOptions.preferPrecomputedFastPath !== false &&
-    FILTER_PASS_PREFER_PRECOMPUTED_SORT;
-  const filterOptions = executionOptions.filterOptions || getFilterOptions();
-  const sourceRawFilters =
-    rawFilters && typeof rawFilters === "object" ? rawFilters : {};
-
-  if (getLoadedRowCount() === 0) {
-    return {
-      kind: "no-data",
-      skipRender,
-      skipStatus,
-    };
+  if (
+    !runtimeOperations ||
+    typeof runtimeOperations.runFilterCore !== "function"
+  ) {
+    throw new Error("Runtime operations are unavailable.");
   }
-
-  const filterResult =
-    fastTableEngine && typeof fastTableEngine.executeFilterCore === "function"
-      ? fastTableEngine.executeFilterCore(sourceRawFilters, {
-          filterOptions,
-        })
-      : filterRuntimeBridge.runFilterPassWithRawFilters(sourceRawFilters, {
-          filterOptions,
-        });
-  if (!filterResult) {
-    return null;
-  }
-
-  let sortRun = null;
-  let renderIndices = filterResult.filteredIndices;
-  if (!skipRender) {
-    sortRun = buildSortedIndicesForCurrentResult(filterResult, {
-      preferPrecomputedFastPath,
-      rawFilters: sourceRawFilters,
-    });
-    if (sortRun && hasIndexCollection(sortRun.indices)) {
-      renderIndices = sortRun.indices;
-    }
-  }
-
-  const dictionaryKeySearchPlan = filterResult.dictionaryPrefilter || null;
-  const reverseIndexMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.durationMs
-      : 0;
-  const reverseIndexSearchMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.searchMs || 0
-      : 0;
-  const reverseIndexSearchFullMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.searchFullMs || 0
-      : 0;
-  const reverseIndexSearchRefinedMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.searchRefinedMs || 0
-      : 0;
-  const reverseIndexMergeMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.mergeMs || 0
-      : 0;
-  const reverseIndexMergeConcatMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.mergeConcatMs || 0
-      : 0;
-  const reverseIndexMergeSortMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.mergeSortMs || 0
-      : 0;
-  const reverseIndexIntersectMs =
-    dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-      ? dictionaryKeySearchPlan.intersectionMs || 0
-      : 0;
-
-  const orchestration = {
-    filterResult,
-    filterModePath:
-      typeof filterResult.modePath === "string" ? filterResult.modePath : "",
-    filteredCount: filterResult.filteredCount,
-    filteredIndices: filterResult.filteredIndices,
-    renderIndices,
-    coreMs: Number(filterResult.coreMs) || 0,
-    reverseIndexMs,
-    reverseIndexSearchMs,
-    reverseIndexSearchFullMs,
-    reverseIndexSearchRefinedMs,
-    reverseIndexMergeMs,
-    reverseIndexMergeConcatMs,
-    reverseIndexMergeSortMs,
-    reverseIndexIntersectMs,
-    active: filterResult.active === true,
-    sort: sortRun,
-    topLevelFilterCacheEvent: filterResult.topLevelCacheEvent || null,
-    reverseIndex:
-      dictionaryKeySearchPlan && dictionaryKeySearchPlan.used
-        ? dictionaryKeySearchPlan
-        : null,
-    selectedBaseCandidateCount: Number.isFinite(
-      filterResult.selectedBaseCandidateCount
-    )
-      ? Number(filterResult.selectedBaseCandidateCount)
-      : -1,
-    filterOptions,
-    dictionaryKeySearchPlan,
-  };
-  window.fastTableLastFilterMode =
-    orchestration.filterModePath || getCurrentFilterModeKey();
-
-  return {
-    kind: "ok",
-    skipRender,
-    skipStatus,
-    keepScroll,
-    filterOptions,
-    orchestration,
-  };
+  return runtimeOperations.runFilterCore(rawFilters, options || {});
 }
 
 function renderFilterUi(coreRun) {
@@ -2544,11 +1996,6 @@ function renderFilterUi(coreRun) {
     topLevelFilterCacheEvent: topLevelCacheEvent,
     reverseIndex: orchestration.reverseIndex,
   };
-
-  if (!skipRender) {
-    window.fastTableFilteredRows = null;
-    window.fastTableFilteredRowIndices = renderIndices;
-  }
 
   if (!skipStatus && sortRun && sortRun.result) {
     setSortTelemetryFromResult(sortRun.result, sortRun.sortedCount, {
@@ -2697,22 +2144,14 @@ function activateRequestedMode(shouldClearFilters, options) {
     clearFiltersUI();
   }
 
-  if (objectRows.length > 0) {
-    objectRowFilterController.setRows(objectRows);
-  }
-
   if (currentLayout === "columnar" && currentColumnarMode === "object") {
     const objectColumnarData =
       cachedObjectColumnarData !== null
         ? cachedObjectColumnarData
         : getOrBuildObjectColumnarData().columnarData;
-    objectColumnarFilterController.setData(objectColumnarData);
     if (!skipInitialRender) {
       renderPreviewFromObjectColumnar(objectColumnarData, null);
     }
-    window.fastTableColumnarData = objectColumnarData;
-    window.fastTableNumericRows = null;
-    window.fastTableNumericColumnarData = null;
     return metrics;
   }
 
@@ -2727,13 +2166,9 @@ function activateRequestedMode(shouldClearFilters, options) {
       ).columnarData;
     }
 
-    numericColumnarFilterController.setData(numericColumnarData);
     if (!skipInitialRender) {
       renderPreviewFromNumericColumnar(numericColumnarData, null);
     }
-    window.fastTableColumnarData = numericColumnarData;
-    window.fastTableNumericColumnarData = numericColumnarData;
-    window.fastTableNumericRows = cachedNumericRows;
     return metrics;
   }
 
@@ -2741,14 +2176,9 @@ function activateRequestedMode(shouldClearFilters, options) {
     const numericRowsBuild = getOrBuildNumericRows();
     const numericRows = numericRowsBuild.numericRows;
 
-    numericRowFilterController.setRows(numericRows);
     if (!skipInitialRender) {
       renderPreviewFromNumericRowIndices(numericRows, null);
     }
-
-    window.fastTableColumnarData = null;
-    window.fastTableNumericRows = numericRows;
-    window.fastTableNumericColumnarData = null;
     return metrics;
   }
 
@@ -2756,9 +2186,6 @@ function activateRequestedMode(shouldClearFilters, options) {
   if (!skipInitialRender) {
     renderPreviewFromObjectRowIndices(rows, null);
   }
-  window.fastTableColumnarData = null;
-  window.fastTableNumericRows = null;
-  window.fastTableNumericColumnarData = null;
   return metrics;
 }
 
@@ -2775,6 +2202,8 @@ function applyLoadedColumnarBinaryDataset(
   derivedMetrics.usedWorkerMode = false;
   derivedMetrics.workerPhaseWallMs = 0;
   activateRequestedMode(true);
+  syncCoreRuntimeDataFromCurrentDataset();
+  syncCoreRuntimeSettingsFromUi(readRawFilters());
   derivedMetrics.finalizeMs = performance.now() - finalizeStartMs;
   derivedMetrics.totalMs = performance.now() - totalStartMs;
   setGenerationStatus(loadedRows.length, derivedMetrics);
@@ -2813,8 +2242,6 @@ function applyLoadedNumericColumnarDataset(
   resetSortState();
   cachedNumericRows = null;
   cachedNumericColumnarData = numericColumnarData;
-  numericRowFilterController.setRows([]);
-  numericColumnarFilterController.setData(numericColumnarData);
 
   const rowCount = numericColumnarData.rowCount;
   const metrics = createZeroGenerationMetrics();
@@ -2823,6 +2250,8 @@ function applyLoadedNumericColumnarDataset(
   metrics.sortedIndexPrecomputeMs = sortedIndexPrecomputeMs;
   metrics.sortedRankPrecomputeMs = sortedRankPrecomputeMs;
   activateRequestedMode(true);
+  syncCoreRuntimeDataFromCurrentDataset();
+  syncCoreRuntimeSettingsFromUi(readRawFilters());
   metrics.finalizeMs = performance.now() - finalizeStartMs;
   metrics.totalMs = performance.now() - totalStartMs;
   setGenerationStatus(rowCount, metrics);
@@ -2846,23 +2275,6 @@ function trySwitchModeUsingExistingRows(options) {
   }
 
   runFilterFromCurrentUi();
-}
-
-function setRawFiltersUI(rawFilters) {
-  const nextFilters = rawFilters || {};
-
-  for (let i = 0; i < filterInputs.length; i += 1) {
-    const input = filterInputs[i];
-    const value = nextFilters[input.dataset.key];
-    input.value = value === undefined ? "" : String(value);
-  }
-}
-
-function setSingleFilterUI(columnKey, value) {
-  for (let i = 0; i < filterInputs.length; i += 1) {
-    const input = filterInputs[i];
-    input.value = input.dataset.key === columnKey ? String(value) : "";
-  }
 }
 
 function getModeOptions() {
@@ -2890,57 +2302,6 @@ function getModeOptions() {
   };
 }
 
-function setModeOptions(nextOptions, switchOptions) {
-  const modeOptions = nextOptions || {};
-
-  if (typeof modeOptions.useColumnarData === "boolean") {
-    useColumnarDataEl.checked = modeOptions.useColumnarData;
-  }
-
-  if (typeof modeOptions.useBinaryColumnar === "boolean") {
-    useBinaryColumnarEl.checked = modeOptions.useBinaryColumnar;
-  }
-
-  if (typeof modeOptions.useNumericData === "boolean" && useNumericDataEl) {
-    useNumericDataEl.checked = modeOptions.useNumericData;
-  }
-
-  if (typeof modeOptions.enableCaching === "boolean") {
-    enableCachingEl.checked = modeOptions.enableCaching;
-  }
-
-  if (
-    typeof modeOptions.useDictionaryKeySearch === "boolean" &&
-    useDictionaryKeySearchEl
-  ) {
-    useDictionaryKeySearchEl.checked = modeOptions.useDictionaryKeySearch;
-  }
-
-  if (
-    typeof modeOptions.useDictionaryIntersection === "boolean" &&
-    useDictionaryIntersectionEl
-  ) {
-    useDictionaryIntersectionEl.checked = modeOptions.useDictionaryIntersection;
-  }
-
-  if (
-    typeof modeOptions.useSmarterPlanner === "boolean" &&
-    useSmarterPlannerEl
-  ) {
-    useSmarterPlannerEl.checked = modeOptions.useSmarterPlanner;
-  }
-
-  if (typeof modeOptions.useSmartFiltering === "boolean") {
-    useSmartFilteringEl.checked = modeOptions.useSmartFiltering;
-  }
-
-  if (typeof modeOptions.useFilterCache === "boolean" && useFilterCacheEl) {
-    useFilterCacheEl.checked = modeOptions.useFilterCache;
-  }
-
-  trySwitchModeUsingExistingRows(switchOptions);
-}
-
 function getFastTableSchema() {
   return {
     columnKeys: columnKeys.slice(),
@@ -2965,6 +2326,41 @@ function getNumericColumnarForSave() {
 
   const numericRowsBuild = getOrBuildNumericRows();
   return getOrBuildNumericColumnarData(numericRowsBuild.numericRows).columnarData;
+}
+
+function syncCoreRuntimeDataFromCurrentDataset() {
+  if (!fastTableEngine) {
+    return;
+  }
+
+  if (isValidNumericColumnarData(cachedNumericColumnarData)) {
+    fastTableEngine.setDataFromNumericColumnar(cachedNumericColumnarData);
+    return;
+  }
+
+  if (Array.isArray(objectRows) && objectRows.length > 0) {
+    fastTableEngine.setDataFromRows(objectRows);
+    return;
+  }
+
+  fastTableEngine.setDataFromRows([]);
+}
+
+function syncCoreRuntimeSettingsFromUi(rawFiltersOverride) {
+  const statePatch = {
+    modeOptions: getModeOptions(),
+    sortOptions: getSortRuntimeOptions(),
+    sortMode: getSortMode(),
+  };
+  if (rawFiltersOverride && typeof rawFiltersOverride === "object") {
+    statePatch.rawFilters = rawFiltersOverride;
+  }
+
+  if (!fastTableEngine || typeof fastTableEngine.restoreStateCore !== "function") {
+    throw new Error("Engine runtime state sync is unavailable.");
+  }
+
+  fastTableEngine.restoreStateCore(statePatch);
 }
 
 async function runGenerationAction(options) {
@@ -3067,6 +2463,8 @@ async function runGenerationAction(options) {
     }
 
     activateRequestedMode(true);
+    syncCoreRuntimeDataFromCurrentDataset();
+    syncCoreRuntimeSettingsFromUi(readRawFilters());
     generationMetrics.finalizeMs = performance.now() - finalizeStartMs;
     generationMetrics.totalMs = performance.now() - totalStartMs;
 
@@ -3102,37 +2500,8 @@ async function runGenerationAction(options) {
 }
 
 fastTableEngine = createFastTableEngine({
+  runtime: browserCoreRuntime,
   adapters: {
-    hasData() {
-      return getLoadedRowCount() > 0;
-    },
-    getRowCount() {
-      return getLoadedRowCount();
-    },
-    getModeOptions,
-    setModeOptions,
-    getRawFilters: readRawFilters,
-    setRawFilters: setRawFiltersUI,
-    setSingleFilter: setSingleFilterUI,
-    clearFilters: clearFiltersUI,
-    runFilterPass: (options) => runFilterFromCurrentUi(options),
-    runSingleFilterPass: (columnKey, value, options) =>
-      filterRuntimeBridge.runSingleFilterPass(columnKey, value, options),
-    runFilterPassWithRawFilters(rawFilters, options) {
-      return filterRuntimeBridge.runFilterPassWithRawFilters(
-        rawFilters || readRawFilters(),
-        options
-      );
-    },
-    getSortModes: getAvailableSortModes,
-    getSortMode,
-    getSortOptions: getSortRuntimeOptions,
-    setSortOptions: setSortRuntimeOptions,
-    buildSortRowsSnapshot: buildRowsSnapshotFromRawFilters,
-    runSortSnapshotPass,
-    prewarmPrecomputedSortState: () =>
-      appSortRuntimeBridge.prewarmPrecomputedSortState(),
-    isTimSortAvailable,
     getNumericColumnarForSave,
     applyLoadedColumnarBinaryDataset,
     applyLoadedNumericColumnarDataset,
@@ -3144,6 +2513,20 @@ fastTableEngine = createFastTableEngine({
     },
   },
 });
+runtimeOperations = fastTableEngine.createRuntimeOperations({
+  getRowCount: getLoadedRowCount,
+  getRawFilters: readRawFilters,
+  getFilterOptions,
+  getCurrentFilterModeKey,
+  syncState: syncCoreRuntimeSettingsFromUi,
+  defaultPreferPrecomputedFastPath: FILTER_PASS_PREFER_PRECOMPUTED_SORT,
+  getSortDescriptors() {
+    return sortController ? sortController.getSortDescriptors() : [];
+  },
+  getSortMode,
+});
+syncCoreRuntimeDataFromCurrentDataset();
+syncCoreRuntimeSettingsFromUi(readRawFilters());
 
 window.fastTableEngine = fastTableEngine;
 window.fastTableIOBridge = fastTableEngine.createIOBridge({
