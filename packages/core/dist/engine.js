@@ -13,6 +13,7 @@ function readSortModesFallback() {
 function createFastTableEngine(options) {
   const input = options || {};
   const adapters = input.adapters || {};
+  const runtime = input.runtime && typeof input.runtime === "object" ? input.runtime : null;
   const listeners = new Set();
 
   const state = {
@@ -187,21 +188,50 @@ function createFastTableEngine(options) {
     return withActionState("applyFilters", () => adapters.runFilterPass(options));
   }
 
-  function runFilterPassWithRawFilters(rawFilters, options) {
-    if (typeof adapters.runFilterPassWithRawFilters !== "function") {
-      return null;
+  function executeFilterCore(rawFilters, options) {
+    if (runtime && typeof runtime.runFilterPassWithRawFilters === "function") {
+      return withActionState("applyFilters", () =>
+        runtime.runFilterPassWithRawFilters(rawFilters || {}, options)
+      );
     }
 
-    return withActionState("applyFilters", () =>
-      adapters.runFilterPassWithRawFilters(rawFilters || {}, options)
-    );
+    if (typeof adapters.runFilterPassWithRawFilters === "function") {
+      return withActionState("applyFilters", () =>
+        adapters.runFilterPassWithRawFilters(rawFilters || {}, options)
+      );
+    }
+
+    if (typeof adapters.runFilterPass === "function") {
+      return withActionState("applyFilters", () => adapters.runFilterPass(options));
+    }
+
+    return null;
   }
 
-  function applySingleFilter(columnKey, value, options) {
+  function runFilterPassWithRawFilters(rawFilters, options) {
+    return executeFilterCore(rawFilters, options);
+  }
+
+  function executeSingleFilterCore(columnKey, value, options) {
+    if (runtime && typeof runtime.runSingleFilterPass === "function") {
+      return withActionState("applySingleFilter", () =>
+        runtime.runSingleFilterPass(columnKey, value, options)
+      );
+    }
+
     if (typeof adapters.runSingleFilterPass === "function") {
       return withActionState("applySingleFilter", () =>
         adapters.runSingleFilterPass(columnKey, value, options)
       );
+    }
+
+    return null;
+  }
+
+  function applySingleFilter(columnKey, value, options) {
+    const singleFilterCoreResult = executeSingleFilterCore(columnKey, value, options);
+    if (singleFilterCoreResult !== null) {
+      return singleFilterCoreResult;
     }
 
     if (typeof adapters.setSingleFilter === "function") {
@@ -222,6 +252,10 @@ function createFastTableEngine(options) {
   }
 
   function runSortSnapshotPassCore(rowsSnapshot, descriptors, sortMode) {
+    if (runtime && typeof runtime.runSortSnapshotPass === "function") {
+      return runtime.runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
+    }
+
     if (typeof adapters.runSortSnapshotPass !== "function") {
       return null;
     }
@@ -260,6 +294,10 @@ function createFastTableEngine(options) {
   }
 
   function buildSortRowsSnapshot(rawFilters) {
+    if (runtime && typeof runtime.buildSortRowsSnapshot === "function") {
+      return runtime.buildSortRowsSnapshot(rawFilters);
+    }
+
     if (typeof adapters.buildSortRowsSnapshot !== "function") {
       return [];
     }
@@ -267,10 +305,56 @@ function createFastTableEngine(options) {
     return adapters.buildSortRowsSnapshot(rawFilters);
   }
 
-  function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
+  function executeSortCore(rowsSnapshot, descriptors, sortMode) {
     return withActionState("applySort", () =>
       runSortSnapshotPassCore(rowsSnapshot, descriptors, sortMode)
     );
+  }
+
+  function runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
+    return executeSortCore(rowsSnapshot, descriptors, sortMode);
+  }
+
+  function restoreStateCore(statePatch) {
+    const patch =
+      statePatch && typeof statePatch === "object" ? statePatch : {};
+
+    return withActionState("restoreState", () => {
+      if (Object.prototype.hasOwnProperty.call(patch, "modeOptions")) {
+        if (runtime && typeof runtime.setModeOptions === "function") {
+          runtime.setModeOptions(patch.modeOptions || {});
+        } else if (typeof adapters.setModeOptions === "function") {
+          adapters.setModeOptions(patch.modeOptions || {});
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(patch, "rawFilters")) {
+        if (runtime && typeof runtime.setRawFilters === "function") {
+          runtime.setRawFilters(patch.rawFilters || {});
+        } else if (typeof adapters.setRawFilters === "function") {
+          adapters.setRawFilters(patch.rawFilters || {});
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(patch, "sortOptions")) {
+        if (runtime && typeof runtime.setSortOptions === "function") {
+          runtime.setSortOptions(patch.sortOptions || {});
+        } else if (typeof adapters.setSortOptions === "function") {
+          adapters.setSortOptions(patch.sortOptions || {});
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(patch, "sortMode")) {
+        if (runtime && typeof runtime.setSortMode === "function") {
+          runtime.setSortMode(patch.sortMode || "");
+        } else if (typeof adapters.setSortMode === "function") {
+          adapters.setSortMode(patch.sortMode || "");
+        }
+      }
+
+      refreshFromAdapters();
+      return buildSnapshot();
+    });
   }
 
   async function generate(generateOptions) {
@@ -409,6 +493,9 @@ function createFastTableEngine(options) {
       runFilterPassWithRawFilters(rawFilters, options) {
         return runFilterPassWithRawFilters(rawFilters, options);
       },
+      executeFilterCore(rawFilters, options) {
+        return executeFilterCore(rawFilters, options);
+      },
       getSortModes() {
         if (typeof adapters.getSortModes === "function") {
           return adapters.getSortModes();
@@ -443,7 +530,13 @@ function createFastTableEngine(options) {
       runSortSnapshotPass(rowsSnapshot, descriptors, sortMode) {
         return runSortSnapshotPass(rowsSnapshot, descriptors, sortMode);
       },
+      executeSortCore(rowsSnapshot, descriptors, sortMode) {
+        return executeSortCore(rowsSnapshot, descriptors, sortMode);
+      },
       prewarmPrecomputedSortState() {
+        if (runtime && typeof runtime.prewarmPrecomputedSortState === "function") {
+          return runtime.prewarmPrecomputedSortState();
+        }
         if (typeof adapters.prewarmPrecomputedSortState !== "function") {
           return false;
         }
@@ -456,6 +549,9 @@ function createFastTableEngine(options) {
 
         return false;
       },
+      restoreStateCore(statePatch) {
+        return restoreStateCore(statePatch);
+      },
     };
   }
 
@@ -466,11 +562,14 @@ function createFastTableEngine(options) {
     setRawFilters,
     clearFilters,
     applyFilters,
+    executeFilterCore,
     runFilterPassWithRawFilters,
     applySingleFilter,
     applySort,
     buildSortRowsSnapshot,
     runSortSnapshotPass,
+    executeSortCore,
+    restoreStateCore,
     generate,
     createIOBridge,
     createBenchmarkApi,
