@@ -83,6 +83,17 @@ I/O adapters are available as:
 
 `@fasttable/core` root export is runtime-neutral; environment-specific adapters are consumed via the explicit/conditional subpaths above.
 
+### Execution ownership contract
+
+- Engine/core owns filter and sort execution paths:
+  - `executeFilterCore(...)`
+  - `executeSortCore(...)`
+  - `restoreStateCore(...)`
+- Browser and CLI wrappers are thin orchestration layers:
+  - Browser wrappers read UI state + render telemetry/DOM.
+  - CLI wrapper parses args + prints/saves output.
+- Benchmark runners use the shared benchmark adapter contract so snapshot/prewarm/sort-pass/restore behavior is centralized and reusable.
+
 ### Build core dist (no npm needed)
 
 Core is consumed from `packages/core/dist` (not directly from `src`).
@@ -179,6 +190,7 @@ Core package:
 - `packages/core/src/sorting-orchestration.js`: shared sort benchmark orchestration consumed by browser and CLI adapters.
 - `packages/core/src/sort-runtime-bridge.js`: shared runtime-facing sorting bridge handling `native`/`timsort`/`precomputed` dispatch.
 - `packages/core/src/sort-benchmark-runtime.js`: thin runtime sync bridge used by browser/CLI benchmark adapters.
+- `packages/core/src/benchmark-runtime-adapter.js`: shared benchmark API adapter (snapshot/prewarm/run/restore contract) used by browser and CLI wrappers.
 - `packages/core/src/io.js`: binary codec (format encode/decode + conversion helpers).
 - `packages/core/src/io-browser.js`, `packages/core/src/io-node.js`: runtime-specific I/O adapters.
 - `packages/core/src/runtime.js`: headless runtime facade for dataset/filter/sort orchestration.

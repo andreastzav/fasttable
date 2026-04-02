@@ -18,6 +18,7 @@ Main source files in `packages/core/src`:
 - `sorting-orchestration.js`: shared sort benchmark orchestration layer for browser and CLI adapters.
 - `sort-runtime-bridge.js`: shared runtime-facing sorting bridge handling mode dispatch and precomputed integration.
 - `sort-benchmark-runtime.js`: shared sort-benchmark runtime bridge used by thin browser/CLI adapters.
+- `benchmark-runtime-adapter.js`: shared benchmark API adapter contract (snapshot/prewarm/run/restore) used by browser and CLI wrappers.
 - `io.js`: binary codec and format conversion utilities.
 - `io-browser.js`, `io-node.js`: browser/node I/O adapters.
 - `generation-worker-protocol.js`: shared worker message protocol.
@@ -55,6 +56,7 @@ Build output:
   - `@fasttable/core/sorting`
   - `@fasttable/core/sorting-orchestration`
   - `@fasttable/core/sort-benchmark-runtime`
+  - `@fasttable/core/benchmark-runtime-adapter`
 - `experimental`:
   - `@fasttable/core/sorting-precomputed-runtime`
   - `@fasttable/core/sort-runtime-bridge`
@@ -94,6 +96,7 @@ Build output:
 - `@fasttable/core/sorting-orchestration`
 - `@fasttable/core/sort-runtime-bridge`
 - `@fasttable/core/sort-benchmark-runtime`
+- `@fasttable/core/benchmark-runtime-adapter`
 - `@fasttable/core/io`
 - `@fasttable/core/io-adapter`
 - `@fasttable/core/io-browser`
@@ -112,6 +115,7 @@ For integrations, prefer these:
 
 - `@fasttable/core/runtime`
 - `@fasttable/core/benchmark`
+- `@fasttable/core/benchmark-runtime-adapter`
 - `@fasttable/core/io`
 - `@fasttable/core/io-adapter`
 - `@fasttable/core/io-node`
@@ -193,6 +197,30 @@ Important:
 - `api` must implement required methods (runtime already does).
 - Validation failures throw immediately.
 - Runtime execution failures are captured in `error` and also appended in `lines`.
+
+## Benchmark runtime adapter (`@fasttable/core/benchmark-runtime-adapter`)
+
+Factory:
+
+- `createBenchmarkRuntimeAdapter({ api, hooks? }) -> benchmarkApi`
+
+Purpose:
+
+- Wraps a benchmark API with one shared contract for:
+  - sort snapshot build
+  - prewarm
+  - sort pass execution
+  - state restore
+- Used by both browser and CLI wrappers so benchmark orchestration stays portable.
+
+Optional hooks:
+
+- `hooks.beforeBuildSortSnapshot(rawFilters)`
+- `hooks.beforeRunSortSnapshotPass(rowsSnapshot, descriptors, sortMode)`
+- `hooks.beforePrewarmSortState()`
+- `hooks.restoreState(statePatch)`
+
+If no restore hook is provided, adapter tries `api.restoreStateCore(...)` first, then falls back to `setModeOptions`/`setRawFilters`/`setSortOptions` when available.
 
 ## IO API (`@fasttable/core/io`, `@fasttable/core/io-node`)
 
