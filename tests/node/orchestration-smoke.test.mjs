@@ -469,6 +469,9 @@ function runSortBridgeSmoke(
   assert.equal(typeof prewarmed, "boolean");
 
   const snapshot = runtime.buildSortRowsSnapshot({});
+  assert.equal(snapshot.isFullSelection, true);
+  assert.equal(snapshot.rowIndices, null);
+  assert.equal(snapshot.count, rowCount);
   const singleResult = sortBridge.runSortSnapshotPass(
     snapshot,
     [{ columnKey: "firstName", direction: "desc" }],

@@ -64,6 +64,19 @@ function getSnapshotCountHint(snapshot) {
 function resolveSnapshotRowIndices(source, totalRows) {
   const maxRows = Math.max(0, Number(totalRows) | 0);
   const snapshot = source && typeof source === "object" ? source : null;
+  const countHint = getSnapshotCountHint(snapshot);
+  if (
+    snapshot &&
+    snapshot.isFullSelection === true &&
+    (countHint === null || countHint === maxRows)
+  ) {
+    return {
+      rowIndices: null,
+      count: maxRows,
+      isFullSelection: true,
+    };
+  }
+
   const directCandidate =
     snapshot && hasIndexCollection(snapshot.rowIndices)
       ? snapshot.rowIndices
@@ -77,10 +90,10 @@ function resolveSnapshotRowIndices(source, totalRows) {
     return {
       rowIndices: materializeIndexBuffer(directCandidate, maxRows),
       count: directCandidate.length | 0,
+      isFullSelection: false,
     };
   }
 
-  const countHint = getSnapshotCountHint(snapshot);
   if (Number.isInteger(countHint) && countHint >= 0 && countHint <= maxRows) {
     const out = new Uint32Array(countHint);
     for (let i = 0; i < countHint; i += 1) {
@@ -89,6 +102,7 @@ function resolveSnapshotRowIndices(source, totalRows) {
     return {
       rowIndices: out,
       count: countHint,
+      isFullSelection: countHint === maxRows,
     };
   }
 
@@ -99,6 +113,7 @@ function resolveSnapshotRowIndices(source, totalRows) {
   return {
     rowIndices: fallback,
     count: maxRows,
+    isFullSelection: true,
   };
 }
 
@@ -329,7 +344,9 @@ function createSortRuntimeBridge(options) {
       }
     }
 
-    const indices = snapshotRowIndices.slice();
+    const indices = hasIndexCollection(snapshotRowIndices)
+      ? snapshotRowIndices.slice()
+      : materializeIndexBuffer(null, snapshotCount);
     const runSortOptions = { ...getSortOptions(), useIndexSort: true };
     const totalRows = getRowCount();
     const precomputedRankColumns = resolvePrecomputedRankColumnsForDescriptors(
@@ -398,7 +415,7 @@ function createSortRuntimeBridge(options) {
         descriptorList,
         selectedIndices: snapshotRowIndices,
         rowCount: totalRows,
-        isFullSelection: snapshotCount === totalRows,
+        isFullSelection: snapshot.isFullSelection === true || snapshotCount === totalRows,
       });
       if (precomputedRun) {
         return precomputedRun;

@@ -27,8 +27,9 @@ test("benchmark smoke works against src runtime", async () => {
   const sortSnapshot = runtime.buildSortRowsSnapshot({});
   assert.ok(sortSnapshot && typeof sortSnapshot === "object");
   assert.equal(sortSnapshot.snapshotType, "row-indices-v2");
-  assert.ok(ArrayBuffer.isView(sortSnapshot.rowIndices));
-  assert.equal(sortSnapshot.count, sortSnapshot.rowIndices.length);
+  assert.equal(sortSnapshot.isFullSelection, true);
+  assert.equal(sortSnapshot.rowIndices, null);
+  assert.equal(sortSnapshot.count, 5000);
 
   const availableSortModes = sortingApi.getAvailableSortModes();
   const runtimeSortModes = runtime.getSortModes();

@@ -4,6 +4,19 @@ All notable changes to `@fasttable/core` will be documented in this file.
 
 The format follows Keep a Changelog and semantic versioning.
 
+## [0.5.11] - 2026-05-01
+
+### Changed
+
+- Added a shared full-table sort snapshot fast path for the no-active-filter case.
+- Precomputed sorting can now consume full-table snapshots without first materializing an identity row-index buffer.
+- Native and timsort paths still materialize indices only when their sortable fallback path needs them.
+
+### Tests
+
+- Updated benchmark/orchestration smoke tests to assert the new `isFullSelection` snapshot contract.
+- Verified CLI one-shot precomputed sorting with the 1M preset.
+
 ## [0.5.10] - 2026-05-01
 
 ### Changed

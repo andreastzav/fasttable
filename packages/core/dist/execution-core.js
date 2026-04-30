@@ -6,6 +6,17 @@ function normalizeRawFilters(rawFilters) {
   return normalizeObjectInput(rawFilters);
 }
 
+function hasActiveRawFilters(rawFilters) {
+  const source = normalizeObjectInput(rawFilters);
+  const keys = Object.keys(source);
+  for (let i = 0; i < keys.length; i += 1) {
+    if (String(source[keys[i]] ?? "").trim() !== "") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildSingleFilterMap(columnKey, value) {
   const out = {};
   if (
@@ -195,8 +206,18 @@ function buildSortRowsSnapshotUsingFilter(context, nextRawFilters) {
     nextRawFilters && typeof nextRawFilters === "object"
       ? nextRawFilters
       : ctx.getRawFilters();
-  const filterResult = ctx.runFilterPassWithRawFilters(raw, { updateState: false });
   const rowCount = ctx.getRowCount();
+  if (!hasActiveRawFilters(raw)) {
+    return {
+      snapshotType: "row-indices-v2",
+      rowIndices: null,
+      count: rowCount,
+      filterCoreMs: 0,
+      isFullSelection: true,
+    };
+  }
+
+  const filterResult = ctx.runFilterPassWithRawFilters(raw, { updateState: false });
   const indices = ctx.materializeFilteredIndices(
     filterResult ? filterResult.filteredIndices : null,
     rowCount
@@ -261,6 +282,7 @@ function restoreRuntimeStateFromSetters(context, statePatch) {
 
 export {
   normalizeRawFilters,
+  hasActiveRawFilters,
   buildSingleFilterMap,
   executeFilterCoreOnRuntime,
   executeSingleFilterCoreOnRuntime,

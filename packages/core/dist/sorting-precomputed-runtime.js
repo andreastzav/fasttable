@@ -527,7 +527,13 @@ function createPrecomputedSortRuntime(options) {
     fullSelectionHint,
     columnKeyHint
   ) {
-    const count = selectedIndices.length;
+    const hasSelectedIndices = hasIndexCollection(selectedIndices);
+    const count =
+      fullSelectionHint === true && !hasSelectedIndices
+        ? rowCount
+        : hasSelectedIndices
+          ? selectedIndices.length
+          : 0;
     if (count === 0) {
       return {
         sortedIndices: new Uint32Array(0),
@@ -537,7 +543,9 @@ function createPrecomputedSortRuntime(options) {
 
     const fullSelection =
       fullSelectionHint === true ||
-      (fullSelectionHint !== false && isIdentitySelection(selectedIndices, rowCount));
+      (fullSelectionHint !== false &&
+        hasSelectedIndices &&
+        isIdentitySelection(selectedIndices, rowCount));
     if (fullSelection) {
       if (direction === "desc") {
         const columnKey =
@@ -618,20 +626,26 @@ function createPrecomputedSortRuntime(options) {
     const payload =
       inputSelection && typeof inputSelection === "object" ? inputSelection : {};
     const descriptorList = normalizeSortDescriptorList(payload.descriptorList);
-    const selectedIndices = materializeIndices(
-      payload.selectedIndices,
-      payload.rowCount
-    );
     const rowCount = Math.max(0, Number(payload.rowCount) | 0);
     const isFullSelection = payload.isFullSelection === true;
-    if (descriptorList.length === 0 || !hasIndexCollection(selectedIndices)) {
+    const selectedIndices =
+      isFullSelection && !hasIndexCollection(payload.selectedIndices)
+        ? null
+        : materializeIndices(payload.selectedIndices, rowCount);
+    if (
+      descriptorList.length === 0 ||
+      (!isFullSelection && !hasIndexCollection(selectedIndices))
+    ) {
       return null;
     }
     if (rowCount <= 0) {
       return null;
     }
 
-    ensurePrecomputedSortState(state, rowCount, selectedIndices.length);
+    const selectedCount = hasIndexCollection(selectedIndices)
+      ? selectedIndices.length
+      : rowCount;
+    ensurePrecomputedSortState(state, rowCount, selectedCount);
     const schema = getSchema();
     const numericColumnarData = getNumericColumnarData();
     const coreStartMs = now();
@@ -658,7 +672,9 @@ function createPrecomputedSortRuntime(options) {
       );
     } else {
       const fullSelection =
-        isFullSelection || isIdentitySelection(selectedIndices, rowCount);
+        isFullSelection ||
+        (hasIndexCollection(selectedIndices) &&
+          isIdentitySelection(selectedIndices, rowCount));
       if (fullSelection && state.fullOrderByDescriptor instanceof Map) {
         const descriptorKey = buildDescriptorCacheKey(descriptorList);
         const cachedOrder = state.fullOrderByDescriptor.get(descriptorKey);
@@ -719,8 +735,11 @@ function createPrecomputedSortRuntime(options) {
         }
       }
 
+      const rankSelection = hasIndexCollection(selectedIndices)
+        ? selectedIndices
+        : materializeIndexBuffer(null, rowCount);
       const rankSorted = sortIndicesByPrecomputedRanks(
-        selectedIndices,
+        rankSelection,
         descriptorList,
         rankStates,
         state
