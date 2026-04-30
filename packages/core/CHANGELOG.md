@@ -4,7 +4,7 @@ All notable changes to `@fasttable/core` will be documented in this file.
 
 The format follows Keep a Changelog and semantic versioning.
 
-## [0.5.11] - 2026-05-01
+## [0.5.12] - 2026-05-01
 
 ### Changed
 
