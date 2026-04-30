@@ -199,40 +199,10 @@ function createEngineRuntimeOperations(options) {
     const targetOrchestrator = createOverrideOrchestrator(optionsForRun);
     if (
       !targetOrchestrator ||
-      typeof targetOrchestrator.runSortCore !== "function" ||
       !targetOrchestrator.sortOrchestrator ||
       typeof targetOrchestrator.sortOrchestrator.runForSnapshot !== "function"
     ) {
-      // Backward-compatible fallback for older orchestrator shape.
-      const legacySortOrchestrator = createEngineFilterSortOrchestrator({
-        engine,
-        getRowCount,
-        getRawFilters,
-        getFilterOptions,
-        getCurrentFilterModeKey,
-        setLastFilterMode,
-        getSortDescriptors:
-          typeof optionsForRun.getSortDescriptors === "function"
-            ? optionsForRun.getSortDescriptors
-            : getSortDescriptors,
-        getSortMode:
-          typeof optionsForRun.getSortMode === "function"
-            ? optionsForRun.getSortMode
-            : getSortMode,
-        syncState,
-        defaultPreferPrecomputedFastPath,
-      });
-      if (
-        !legacySortOrchestrator.sortOrchestrator ||
-        typeof legacySortOrchestrator.sortOrchestrator.runForSnapshot !==
-          "function"
-      ) {
-        return null;
-      }
-      return legacySortOrchestrator.sortOrchestrator.runForSnapshot(
-        sourceSnapshot,
-        optionsForRun
-      );
+      return null;
     }
 
     return targetOrchestrator.sortOrchestrator.runForSnapshot(

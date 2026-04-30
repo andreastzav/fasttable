@@ -3,14 +3,17 @@ import path from "node:path";
 import { createFastTableRuntime } from "./packages/core/dist/runtime.js";
 import { createFastTableEngine } from "./packages/core/dist/engine.js";
 import { createBenchmarkRuntimeAdapter } from "./packages/core/dist/benchmark-runtime-adapter.js";
-import { loadColumnarBinaryPreset } from "./packages/core/dist/io-node.js";
-import { fastTableGenerationWorkersNodeApi } from "./packages/core/dist/generation-workers-node.js";
 import {
   createBenchmarkDelayTick,
   resolveBenchmarkTickPolicy,
   runFilteringBenchmark,
   runSortBenchmark,
 } from "./packages/core/dist/benchmark.js";
+import {
+  consumeSharedDataOption,
+  loadRuntimeDataFromArgs,
+  precomputeSortWorkersFromArgs,
+} from "./cli-common.mjs";
 
 function parseArgs(argv) {
   const args = {
@@ -30,16 +33,6 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = String(argv[i] || "");
-    if (token === "--preset" && i + 1 < argv.length) {
-      args.preset = Number.parseInt(String(argv[i + 1]), 10);
-      i += 1;
-      continue;
-    }
-    if (token === "--preset-dir" && i + 1 < argv.length) {
-      args.presetDir = String(argv[i + 1]);
-      i += 1;
-      continue;
-    }
     if (token === "--bench" && i + 1 < argv.length) {
       args.bench = String(argv[i + 1]).toLowerCase();
       i += 1;
@@ -59,31 +52,6 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
-    if (token === "--workers" && i + 1 < argv.length) {
-      args.workers = Math.max(1, Number.parseInt(String(argv[i + 1]), 10) || 1);
-      i += 1;
-      continue;
-    }
-    if (token === "--chunk-size" && i + 1 < argv.length) {
-      args.chunkSize = Math.max(
-        1,
-        Number.parseInt(String(argv[i + 1]), 10) || 1
-      );
-      i += 1;
-      continue;
-    }
-    if (token === "--generate-workers" && i + 1 < argv.length) {
-      args.generateWorkers = Math.max(
-        0,
-        Number.parseInt(String(argv[i + 1]), 10) || 0
-      );
-      i += 1;
-      continue;
-    }
-    if (token === "--precompute-sort-workers") {
-      args.precomputeSortWorkers = true;
-      continue;
-    }
     if (token === "--sort-mode" && i + 1 < argv.length) {
       args.sortMode = String(argv[i + 1]).trim().toLowerCase();
       i += 1;
@@ -96,6 +64,12 @@ function parseArgs(argv) {
     }
     if (token === "--help" || token === "-h") {
       args.help = true;
+      continue;
+    }
+
+    const sharedConsumedIndex = consumeSharedDataOption(argv, i, args);
+    if (sharedConsumedIndex !== null) {
+      i = sharedConsumedIndex;
       continue;
     }
   }
@@ -216,64 +190,8 @@ async function main() {
     runtime,
     adapters: {},
   });
-  const schema = runtime.getSchema();
-
-  if (args.generateWorkers > 0) {
-    console.log(
-      `Generating ${args.generateWorkers.toLocaleString(
-        "en-US"
-      )} rows with worker_threads...`
-    );
-    const generated = await fastTableGenerationWorkersNodeApi.generateRowsWithWorkers(
-      {
-        rowCount: args.generateWorkers,
-        workerCount: args.workers,
-        chunkSize: args.chunkSize,
-      }
-    );
-    engine.setDataFromNumericColumnar(generated.derivedData.numericColumnarData);
-    console.log(
-      `Generated ${engine
-        .getRowCount()
-        .toLocaleString("en-US")} rows in ${generated.wallMs.toFixed(2)} ms.`
-    );
-  } else {
-    const presetDir = path.resolve(args.presetDir);
-    console.log(`Loading preset ${args.preset} from ${presetDir}...`);
-    const loaded = await loadColumnarBinaryPreset({
-      schema,
-      presetDir,
-      rowCount: args.preset,
-    });
-    engine.setDataFromNumericColumnar(loaded.numericColumnarData);
-    console.log(`Loaded ${engine.getRowCount().toLocaleString("en-US")} rows.`);
-  }
-
-  if (args.precomputeSortWorkers) {
-    const numericColumnarData = engine.getNumericColumnarForSave();
-    if (!numericColumnarData) {
-      throw new Error("No numeric columnar data available for sort precompute.");
-    }
-
-    console.log(
-      `Precomputing sorted indices with ${args.workers} worker(s)...`
-    );
-    const sortPrecompute =
-      await fastTableGenerationWorkersNodeApi.buildSortedIndicesWithWorkers({
-        numericColumnarData,
-        workerCount: args.workers,
-      });
-
-    numericColumnarData.sortedIndexColumns = sortPrecompute.sortedIndexColumns;
-    numericColumnarData.sortedIndexByKey = sortPrecompute.sortedIndexByKey;
-    engine.setDataFromNumericColumnar(numericColumnarData);
-
-    console.log(
-      `Precomputed ${sortPrecompute.completedColumns}/${
-        sortPrecompute.totalColumns
-      } sortable columns in ${sortPrecompute.durationMs.toFixed(2)} ms.`
-    );
-  }
+  await loadRuntimeDataFromArgs(engine, runtime, args, (line) => console.log(line));
+  await precomputeSortWorkersFromArgs(engine, args, (line) => console.log(line));
 
   const availableSortModes = engine.getSortModes();
   if (

@@ -1,8 +1,10 @@
-import path from "node:path";
 import { createFastTableRuntime } from "./packages/core/dist/runtime.js";
 import { createFastTableEngine } from "./packages/core/dist/engine.js";
-import { loadColumnarBinaryPreset } from "./packages/core/dist/io-node.js";
-import { fastTableGenerationWorkersNodeApi } from "./packages/core/dist/generation-workers-node.js";
+import {
+  consumeSharedDataOption,
+  loadRuntimeDataFromArgs,
+  precomputeSortWorkersFromArgs,
+} from "./cli-common.mjs";
 
 function parseArgs(argv) {
   const args = {
@@ -27,16 +29,6 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
-    if (token === "--preset" && i + 1 < argv.length) {
-      args.preset = Number.parseInt(String(argv[i + 1]), 10);
-      i += 1;
-      continue;
-    }
-    if (token === "--preset-dir" && i + 1 < argv.length) {
-      args.presetDir = String(argv[i + 1]);
-      i += 1;
-      continue;
-    }
     if (token === "--filters" && i + 1 < argv.length) {
       args.filters = String(argv[i + 1]);
       i += 1;
@@ -50,31 +42,6 @@ function parseArgs(argv) {
     if (token === "--sort-mode" && i + 1 < argv.length) {
       args.sortMode = String(argv[i + 1]).trim().toLowerCase();
       i += 1;
-      continue;
-    }
-    if (token === "--workers" && i + 1 < argv.length) {
-      args.workers = Math.max(1, Number.parseInt(String(argv[i + 1]), 10) || 1);
-      i += 1;
-      continue;
-    }
-    if (token === "--chunk-size" && i + 1 < argv.length) {
-      args.chunkSize = Math.max(
-        1,
-        Number.parseInt(String(argv[i + 1]), 10) || 1
-      );
-      i += 1;
-      continue;
-    }
-    if (token === "--generate-workers" && i + 1 < argv.length) {
-      args.generateWorkers = Math.max(
-        0,
-        Number.parseInt(String(argv[i + 1]), 10) || 0
-      );
-      i += 1;
-      continue;
-    }
-    if (token === "--precompute-sort-workers") {
-      args.precomputeSortWorkers = true;
       continue;
     }
     if (token === "--no-prefer-precomputed-fast-path") {
@@ -91,6 +58,12 @@ function parseArgs(argv) {
     }
     if (token === "--help" || token === "-h") {
       args.help = true;
+      continue;
+    }
+
+    const sharedConsumedIndex = consumeSharedDataOption(argv, i, args);
+    if (sharedConsumedIndex !== null) {
+      i = sharedConsumedIndex;
       continue;
     }
   }
@@ -209,66 +182,6 @@ function createCliEngine(runtime) {
   return createFastTableEngine({ runtime });
 }
 
-async function loadRuntimeData(engine, runtime, args, log) {
-  const schema = runtime.getSchema();
-  if (args.generateWorkers > 0) {
-    log(
-      `Generating ${args.generateWorkers.toLocaleString(
-        "en-US"
-      )} rows with worker_threads...`
-    );
-    const generated = await fastTableGenerationWorkersNodeApi.generateRowsWithWorkers(
-      {
-        rowCount: args.generateWorkers,
-        workerCount: args.workers,
-        chunkSize: args.chunkSize,
-      }
-    );
-    engine.setDataFromNumericColumnar(generated.derivedData.numericColumnarData);
-    log(
-      `Generated ${engine
-        .getRowCount()
-        .toLocaleString("en-US")} rows in ${generated.wallMs.toFixed(2)} ms.`
-    );
-    return;
-  }
-
-  const presetDir = path.resolve(args.presetDir);
-  log(`Loading preset ${args.preset} from ${presetDir}...`);
-  const loaded = await loadColumnarBinaryPreset({
-    schema,
-    presetDir,
-    rowCount: args.preset,
-  });
-  engine.setDataFromNumericColumnar(loaded.numericColumnarData);
-  log(`Loaded ${engine.getRowCount().toLocaleString("en-US")} rows.`);
-}
-
-async function maybePrecomputeSortWorkers(engine, args, log) {
-  if (!args.precomputeSortWorkers) {
-    return;
-  }
-
-  const numericColumnarData = engine.getNumericColumnarForSave();
-  if (!numericColumnarData) {
-    throw new Error("No numeric columnar data available for sort precompute.");
-  }
-
-  log(`Precomputing sorted indices with ${args.workers} worker(s)...`);
-  const sortPrecompute =
-    await fastTableGenerationWorkersNodeApi.buildSortedIndicesWithWorkers({
-      numericColumnarData,
-      workerCount: args.workers,
-    });
-
-  numericColumnarData.sortedIndexColumns = sortPrecompute.sortedIndexColumns;
-  numericColumnarData.sortedIndexByKey = sortPrecompute.sortedIndexByKey;
-  engine.setDataFromNumericColumnar(numericColumnarData);
-  log(
-    `Precomputed ${sortPrecompute.completedColumns}/${sortPrecompute.totalColumns} sortable columns in ${sortPrecompute.durationMs.toFixed(2)} ms.`
-  );
-}
-
 function buildHumanOutput(payload) {
   const lines = [];
   lines.push(`Operation: ${payload.operation}`);
@@ -323,8 +236,8 @@ async function main() {
 
   const runtime = createFastTableRuntime();
   const engine = createCliEngine(runtime);
-  await loadRuntimeData(engine, runtime, args, log);
-  await maybePrecomputeSortWorkers(engine, args, log);
+  await loadRuntimeDataFromArgs(engine, runtime, args, log);
+  await precomputeSortWorkersFromArgs(engine, args, log);
 
   const runtimeOperations = engine.createRuntimeOperations({
     getRowCount() {

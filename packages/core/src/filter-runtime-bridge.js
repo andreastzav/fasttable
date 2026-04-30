@@ -117,7 +117,6 @@ function createFilterRuntimeBridge(options) {
             data.rowCount >= 0 &&
             Array.isArray(data.columns)
           );
-  const syncAllControllerIndices = input.syncAllControllerIndices === true;
 
   function getCurrentModeKey() {
     const modeKey = String(getCurrentFilterModeKey() || "");
@@ -248,16 +247,10 @@ function createFilterRuntimeBridge(options) {
   }
 
   function syncActiveControllerIndices(filteredIndices) {
-    if (syncAllControllerIndices) {
-      setControllerCurrentIndices(controllers.objectRow, filteredIndices);
-      setControllerCurrentIndices(controllers.objectColumnar, filteredIndices);
-      setControllerCurrentIndices(controllers.numericRow, filteredIndices);
-      setControllerCurrentIndices(controllers.numericColumnar, filteredIndices);
-      return;
-    }
-
-    const bundle = getControllerBundleForMode();
-    setControllerCurrentIndices(bundle.controller, filteredIndices);
+    setControllerCurrentIndices(controllers.objectRow, filteredIndices);
+    setControllerCurrentIndices(controllers.objectColumnar, filteredIndices);
+    setControllerCurrentIndices(controllers.numericRow, filteredIndices);
+    setControllerCurrentIndices(controllers.numericColumnar, filteredIndices);
   }
 
   function applyFilterPath(effectiveRawFilters, filterOptions, baseIndices) {

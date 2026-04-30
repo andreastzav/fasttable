@@ -765,7 +765,6 @@ function createFastTableRuntime(options) {
       "numeric-row": "numeric-rows",
       "object-row": "object-rows",
     },
-    syncAllControllerIndices: true,
   });
 
   sortRuntimeBridge = createSortRuntimeBridge({

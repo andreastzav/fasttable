@@ -4,6 +4,31 @@ All notable changes to `@fasttable/core` will be documented in this file.
 
 The format follows Keep a Changelog and semantic versioning.
 
+## [0.5.10] - 2026-05-01
+
+### Changed
+
+- Removed obsolete legacy sort-orchestrator fallback branch from runtime operations snapshot execution.
+- Removed legacy sort-benchmark snapshot compatibility paths (`legacy-row-array-v1` and `snapshotPayload.rows`) and enforced object snapshot payload contract.
+- Simplified filter runtime bridge controller-index synchronization to a single always-sync path (removed dead conditional branch).
+- Deduplicated CLI data-loading/precompute plumbing by introducing shared `cli-common.mjs` used by both:
+  - `benchmark-cli.mjs`
+  - `runtime-cli.mjs`
+
+### Refactor
+
+- Reduced compatibility layering in hot orchestration paths to tighten contracts and lower maintenance surface.
+
+### Tests
+
+- Verified node suites remain green after cleanup:
+  - parity
+  - io roundtrip
+  - benchmark smoke
+  - orchestration smoke
+  - hardcut refactor
+  - worker adapter smoke (browser/node)
+
 ## [0.5.9] - 2026-04-03
 
 ### Changed

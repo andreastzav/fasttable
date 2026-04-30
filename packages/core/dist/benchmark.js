@@ -757,26 +757,17 @@ async function runSortBenchmark(options) {
     const snapshotPayload =
       snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
         ? snapshot
-        : Array.isArray(snapshot)
-          ? {
-              snapshotType: "legacy-row-array-v1",
-              rowIndices: snapshot,
-              count: snapshot.length,
-            }
-          : {
-              snapshotType: "empty-v1",
-              rowIndices: [],
-              count: 0,
-            };
+        : null;
+    if (!snapshotPayload) {
+      throw new Error("Invalid sort snapshot payload.");
+    }
     const snapshotCount =
       Number.isFinite(snapshotPayload.count) && Number(snapshotPayload.count) >= 0
         ? Math.floor(Number(snapshotPayload.count))
-        : Array.isArray(snapshotPayload.rows)
-          ? snapshotPayload.rows.length
-          : Array.isArray(snapshotPayload.rowIndices) ||
-              ArrayBuffer.isView(snapshotPayload.rowIndices)
-            ? snapshotPayload.rowIndices.length
-            : 0;
+        : Array.isArray(snapshotPayload.rowIndices) ||
+            ArrayBuffer.isView(snapshotPayload.rowIndices)
+          ? snapshotPayload.rowIndices.length
+          : 0;
 
     if (
       includesPrecomputedMode &&
