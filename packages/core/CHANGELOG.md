@@ -4,6 +4,13 @@ All notable changes to `@fasttable/core` will be documented in this file.
 
 The format follows Keep a Changelog and semantic versioning.
 
+## [0.5.13] - 2026-05-17
+
+### Docs
+
+- Documented benchmark hardware in the root README performance section (Intel Core i7-8700K @ 3.7 GHz, 32 GB DDR4 RAM).
+- Updated root AGENTS notes to document the changelog-first + pre-commit auto-bump workflow.
+
 ## [0.5.12] - 2026-05-01
 
 ### Changed

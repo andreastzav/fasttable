@@ -21,6 +21,8 @@ I did not prioritize building a worker-based filtering/sorting pipeline that spl
 
 On a 1,000,000 row table, this project reaches (vs native browser implementations):
 
+Benchmark machine: **Intel Core i7-8700K @ 3.7 GHz, 32 GB DDR4 RAM**.
+
 - Filtering: about **12 ms** total on average, roughly a **77x** improvement, just under 2 OOMs (order of magnitude)
 - Single-column sorting: about **1 ms**, roughly a **1500x** improvement, just over 3 OOMs
 - Two-column sorting: about **5 ms** on average, roughly a **1360x** improvement, just over 3 OOMs

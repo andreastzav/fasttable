@@ -33,9 +33,15 @@ This file captures the repo-level conventions for future edits.
 
 - Rebuild core dist after `packages/core/src/*` changes:
   - `node build-core.mjs`
-- Bump app/core version together:
-  - `node scripts/bump-version.mjs`
-- Keep these in sync:
+- Do not manually run `node scripts/bump-version.mjs` before a normal commit.
+- Version bumping is automatic on `git commit` via `.githooks/pre-commit`:
+  - the hook runs `node scripts/bump-version.mjs --stage`
+  - it updates/stages `version.json` and `packages/core/package.json`
+- Before committing, add the changelog entry for the next patch version.
+  - example: if current version is `0.5.12`, write the changelog heading as `0.5.13`
+  - the commit hook will bump package/app version to match that heading
+- Use `git commit --no-verify` only for follow-up metadata corrections where another version bump would be wrong.
+- Keep these in sync after commit:
   - `version.json`
   - `packages/core/package.json`
   - `packages/core/CHANGELOG.md`
